@@ -1,0 +1,9 @@
+boto3
+botocore
+Django
+Jupyter
+numpy
+openpyxl
+pandas
+python-dotenv
+requests
