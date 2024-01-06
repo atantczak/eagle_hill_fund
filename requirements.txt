@@ -7,3 +7,4 @@ openpyxl
 pandas
 python-dotenv
 requests
+requests-mock
