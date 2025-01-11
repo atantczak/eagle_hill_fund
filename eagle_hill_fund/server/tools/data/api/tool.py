@@ -14,7 +14,7 @@ class APIClient(DataTransmissionTool):
 
         :param base_url: Base URL to be prepended to all endpoint calls (optional).
         """
-        self.base_url = base_url
+        super().__init__(base_url=base_url)
 
     def get_status_code(self, **kwargs):
         """

@@ -1,9 +1,4 @@
-import io
 import logging
-
-import pandas as pd
-import requests
-import requests_mock
 
 logging.basicConfig(level=logging.INFO)
 
