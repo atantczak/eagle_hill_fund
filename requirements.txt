@@ -17,4 +17,5 @@ numpy
 openai
 pandas==2.1.4
 Requests==2.31.0
+tweepy
 -e .
