@@ -4,7 +4,7 @@ import pandas as pd
 import requests
 import requests_mock
 
-from eagle_hill_fund.server.tools.data.tool import DataTransmissionTool
+from eagle_hill_fund.server.tools.data.transmission.tool import DataTransmissionTool
 
 
 class APIClient(DataTransmissionTool):

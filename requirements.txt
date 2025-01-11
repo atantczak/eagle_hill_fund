@@ -8,3 +8,13 @@ pandas
 python-dotenv
 requests
 requests-mock
+Jupyter
+langchain
+langchain-experimental
+langchain-openai
+lxml
+numpy
+openai
+pandas==2.1.4
+Requests==2.31.0
+-e .
