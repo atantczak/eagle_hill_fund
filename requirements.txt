@@ -13,9 +13,11 @@ langchain
 langchain-experimental
 langchain-openai
 lxml
+networkx
 numpy
 openai
 pandas==2.1.4
 Requests==2.31.0
+scipy
 tweepy
 -e .
