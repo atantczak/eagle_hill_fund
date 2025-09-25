@@ -1,10 +1,16 @@
 from typing import Dict, List
-from eagle_hill_fund.server.integrations.financial.financial_modeling_prep.tool import FinancialModelingPrepTool
+from eagle_hill_fund.server.tools.data.transmission.api.tool import APIClient
+import os
+from dotenv import (
+    load_dotenv,
+)
+load_dotenv()
 
 
-class FMPPriceDataTool(FinancialModelingPrepTool):
+class FMPPriceDataTool(APIClient):
     def __init__(self):
-        super().__init__()
+        super().__init__(base_url="https://financialmodelingprep.com/stable")
+        self.api_key = os.getenv("FMP_API_KEY")
 
     def get_stock_price(self, symbol: str) -> Dict:
         """Get current stock price data.

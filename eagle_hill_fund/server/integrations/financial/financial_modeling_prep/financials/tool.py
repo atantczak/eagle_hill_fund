@@ -1,10 +1,15 @@
 from typing import Dict, List
-from eagle_hill_fund.server.integrations.financial.financial_modeling_prep.tool import FinancialModelingPrepTool
+from eagle_hill_fund.server.tools.data.transmission.api.tool import APIClient
+import os
+from dotenv import (
+    load_dotenv,
+)
+load_dotenv()
 
-
-class FMPFinancialsTool(FinancialModelingPrepTool):
+class FMPFinancialsTool(APIClient):
     def __init__(self):
-        super().__init__()
+        super().__init__(base_url="https://financialmodelingprep.com/stable")
+        self.api_key = os.getenv("FMP_API_KEY")
 
     def get_company_profile(self, symbol: str) -> Dict:
         """Get company profile information.
@@ -15,8 +20,8 @@ class FMPFinancialsTool(FinancialModelingPrepTool):
         Returns:
             Dict containing company profile data
         """
-        endpoint = f"/profile/{symbol}"
-        response = self.get(endpoint, params={"apikey": self.api_key})
+        endpoint = f"/profile"
+        response = self.get(endpoint, params={"apikey": self.api_key, "symbol": symbol})
         return response.json()[0] if response.json() else {}
         
     def get_financial_statements(
@@ -36,14 +41,16 @@ class FMPFinancialsTool(FinancialModelingPrepTool):
             
         Returns:
             List of financial statement dictionaries
+            https://financialmodelingprep.com/stable/income-statement?symbol=AAPL&apikey=JxuOcSXvYSQcD22QTupGNdPqjVcSRcFK
         """
-        endpoint = f"/{statement}/{symbol}"
+        endpoint = f"/{statement}"
         response = self.get(
             endpoint,
             params={
                 "apikey": self.api_key,
                 "period": period,
-                "limit": limit
+                "limit": limit,
+                "symbol": symbol
             }
         )
         return response.json()
