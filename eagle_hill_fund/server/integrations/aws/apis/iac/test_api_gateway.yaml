@@ -1,0 +1,7 @@
+Resources:
+  APIGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Description: 'This is a test REST API created from a YAML file'
+      Name: 'test_rest_api'
+      Region: 'us-west-2'

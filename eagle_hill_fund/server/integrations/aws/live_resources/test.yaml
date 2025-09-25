@@ -1,0 +1,12 @@
+Shopping List:
+  eggs:
+    amount: 12
+    brand: Mr Tweedy
+    type: free range
+  milk:
+    brands:
+    - FarmFresh
+    - FarmHouse gold
+    - Daisy The Cow
+    litres: 1.5
+    type: pasteurised
