@@ -17,6 +17,7 @@ networkx
 numpy
 openai
 pandas==2.1.4
+plotly
 Requests==2.31.0
 scipy
 tweepy
