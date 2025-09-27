@@ -28,7 +28,7 @@ class StrategyConfig:
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     initial_capital: float = 100000.0
-    commission_per_trade: float = 1.0
+    commission_per_trade: float = 0.0
     position_size_pct: float = 0.1  # 10% of portfolio per position
     max_positions: int = 10
     rebalance_frequency: str = "daily"  # daily, weekly, monthly
