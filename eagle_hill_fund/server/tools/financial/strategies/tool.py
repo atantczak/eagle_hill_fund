@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import warnings
 
 from eagle_hill_fund.server.tools.financial.portfolio.tool import PortfolioTool, OrderSide, OrderType
+from eagle_hill_fund.server.tools.data.parallelization.tool import ParallelizationTool
 
 
 @dataclass
@@ -27,7 +28,7 @@ class StrategyConfig:
     symbols: List[str] = field(default_factory=list)
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
-    initial_capital: float = 100000.0
+    initial_capital: float = 1000000.0
     commission_per_trade: float = 0.0
     position_size_pct: float = 0.1  # 10% of portfolio per position
     max_positions: int = 10
@@ -123,20 +124,30 @@ class BaseStrategyTool(ABC):
     
     def calculate_indicators(self) -> None:
         """
-        Calculate technical indicators for all symbols.
+        Calculate technical indicators for all symbols using parallel processing.
         Override this method to implement custom indicators.
         """
         if self.data is None:
             raise ValueError("Data not set. Call set_data() first.")
         
-        # Calculate basic indicators for each symbol
-        for symbol in self.data['symbol'].unique():
+        # Get unique symbols
+        symbols = self.data['symbol'].unique().tolist()
+        
+        # Initialize parallelization tool
+        parallel_tool = ParallelizationTool()
+        
+        # Define the function to calculate indicators for a single symbol
+        def calculate_symbol_indicators(symbol):
             symbol_data = self.data[self.data['symbol'] == symbol].copy()
-            
-            # Basic technical indicators
             indicators = self._calculate_basic_indicators(symbol_data)
-            
-            # Store indicators
+            return symbol, indicators
+        
+        # Calculate indicators in parallel
+        print(f"Calculating indicators for {len(symbols)} symbols in parallel...")
+        results = parallel_tool.smart_parallel_map(calculate_symbol_indicators, symbols)
+        
+        # Store results
+        for symbol, indicators in results:
             self.indicators[symbol] = indicators
         
         print(f"Indicators calculated for {len(self.indicators)} symbols")
@@ -338,7 +349,7 @@ class BaseStrategyTool(ABC):
     
     def run_backtest(self) -> Dict:
         """
-        Run the backtest strategy.
+        Run the backtest strategy with parallel processing for signal generation.
         
         Returns:
             Dictionary containing backtest results
@@ -350,7 +361,7 @@ class BaseStrategyTool(ABC):
         print(f"Period: {self.data['date'].min()} to {self.data['date'].max()}")
         print(f"Symbols: {self.data['symbol'].nunique()}")
         
-        # Calculate indicators
+        # Calculate indicators (already parallelized)
         self.calculate_indicators()
         
         # Get unique dates
@@ -359,7 +370,10 @@ class BaseStrategyTool(ABC):
         # Initialize portfolio
         self.portfolio.set_current_timestamp(dates[0])
         
-        # Run backtest
+        # Initialize parallelization tool
+        parallel_tool = ParallelizationTool()
+        
+        # Run backtest with parallel signal generation
         for i, date in enumerate(dates):
             self.current_date = date
             
@@ -367,8 +381,11 @@ class BaseStrategyTool(ABC):
             current_data = self.data[self.data['date'] == date]
             self.current_prices = dict(zip(current_data['symbol'], current_data['close']))
             
-            # Generate signals
-            signals = self.generate_signals(date)
+            # Generate signals (parallelized for large symbol counts)
+            if len(self.config.symbols) > 100:
+                signals = self._generate_signals_parallel(date, parallel_tool)
+            else:
+                signals = self.generate_signals(date)
             
             # Execute signals
             executions = self.execute_signals(signals)
@@ -388,6 +405,108 @@ class BaseStrategyTool(ABC):
         
         print("Backtest completed!")
         return self.backtest_results
+    
+    def _generate_signals_parallel(self, date: datetime, parallel_tool: ParallelizationTool) -> List[Signal]:
+        """
+        Generate signals in parallel for large symbol counts.
+        This is a fallback method when there are many symbols to process.
+        """
+        # Get data for the specified date
+        current_data = self.data[self.data['date'] == date]
+        if current_data.empty:
+            return []
+        
+        # Create a dictionary for easy lookup by symbol
+        data_dict = current_data.set_index('symbol')
+        
+        # Filter symbols that have data for this date
+        available_symbols = [symbol for symbol in self.config.symbols if symbol in data_dict.index]
+        
+        # Define function to generate signals for a batch of symbols
+        def generate_signals_batch(symbol_batch):
+            batch_signals = []
+            for symbol in symbol_batch:
+                if symbol not in data_dict.index:
+                    continue
+                
+                # Get basic data
+                row = data_dict.loc[symbol]
+                
+                # Get indicators for this symbol
+                if symbol not in self.indicators:
+                    continue
+                    
+                symbol_indicators = self.indicators[symbol]
+                symbol_data_for_date = symbol_indicators[symbol_indicators['date'] == date]
+                
+                if symbol_data_for_date.empty:
+                    continue
+                    
+                indicator_row = symbol_data_for_date.iloc[0]
+                
+                # Generate signals for this symbol (simplified version)
+                # This is a basic implementation - subclasses should override for full functionality
+                try:
+                    signals = self._generate_single_symbol_signals(symbol, row, indicator_row, date)
+                    batch_signals.extend(signals)
+                except Exception as e:
+                    # Skip symbols that cause errors
+                    continue
+            
+            return batch_signals
+        
+        # Split symbols into batches for parallel processing
+        batch_size = max(1, len(available_symbols) // parallel_tool.max_workers)
+        symbol_batches = [available_symbols[i:i + batch_size] for i in range(0, len(available_symbols), batch_size)]
+        
+        # Process batches in parallel
+        batch_results = parallel_tool.parallel_map(generate_signals_batch, symbol_batches)
+        
+        # Flatten results
+        all_signals = []
+        for batch_signals in batch_results:
+            all_signals.extend(batch_signals)
+        
+        return all_signals
+    
+    def _generate_single_symbol_signals(self, symbol: str, row: pd.Series, indicator_row: pd.Series, date: datetime) -> List[Signal]:
+        """
+        Generate signals for a single symbol. This is a simplified version
+        that subclasses can override for more complex logic.
+        """
+        signals = []
+        
+        # Check for position exits first
+        position = self.portfolio.get_position(symbol)
+        if position and position.quantity != 0:
+            # Basic exit logic - subclasses should override
+            if hasattr(self, '_should_exit_position'):
+                if self._should_exit_position(symbol, indicator_row):
+                    signals.append(Signal(
+                        symbol=symbol,
+                        timestamp=date,
+                        signal_type='sell' if position.quantity > 0 else 'buy',
+                        strength=1.0,
+                        price=row['close'],
+                        metadata={'reason': 'exit'}
+                    ))
+        
+        # Check for new entries
+        current_positions = len(self.portfolio.get_positions())
+        if current_positions < self.config.max_positions:
+            # Basic entry logic - subclasses should override
+            if hasattr(self, '_is_valid_entry') and hasattr(self, '_should_enter_position'):
+                if self._is_valid_entry(indicator_row, 'long') and self._should_enter_position(symbol, indicator_row):
+                    signals.append(Signal(
+                        symbol=symbol,
+                        timestamp=date,
+                        signal_type='buy',
+                        strength=1.0,
+                        price=row['close'],
+                        metadata={'reason': 'entry'}
+                    ))
+        
+        return signals
     
     def get_performance_summary(self) -> Dict:
         """
