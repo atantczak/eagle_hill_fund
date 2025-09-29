@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 
 from eagle_hill_fund.server.tools.financial.strategies.tool import BaseStrategyTool, StrategyConfig, Signal
@@ -11,15 +11,17 @@ from eagle_hill_fund.server.tools.financial.strategies.tool import BaseStrategyT
 class BollingerBandConfig(StrategyConfig):
     """Configuration for Bollinger Band mean reversion strategy."""
     name: str = "BollingerBandMeanReversion"
+
+    short_allowed: bool = False
     
     # Bollinger Band parameters
     bb_period: int = 20  # Period for moving average
     bb_std_dev: float = 2.0  # Standard deviation multiplier
     
     # Entry/Exit thresholds
-    oversold_threshold: float = 0.1  # Buy when bb_position <= 0.1
-    overbought_threshold: float = 0.9  # Sell when bb_position >= 0.9
-    exit_threshold: float = 0.5  # Exit when bb_position crosses 0.5
+    entry_threshold: float = 0.0  # Buy when bb_position reaches bottom of band
+    exit_threshold: float = 1.0  # Exit when bb_position crosses 0.5
+    force_win_for_bb_exit: bool = True
     
     # Additional filters
     min_bb_width: float = 0.02  # Minimum band width (2% of price)
@@ -30,7 +32,16 @@ class BollingerBandConfig(StrategyConfig):
     # Risk management
     stop_loss_pct: float = 0.05  # 5% stop loss
     take_profit_pct: float = 0.03  # 3% take profit
-    max_holding_days: int = 10  # Maximum holding period
+    max_holding_days: Optional[int] = None  # Maximum holding period (None = disabled)
+    
+    # Exit control flags
+    use_bb_exit: bool = True  # Use Bollinger Band position for exits
+    use_take_profit: bool = True  # Use take profit exits
+    use_max_holding_days: bool = False  # Use maximum holding days (requires max_holding_days to be set)
+    
+    # Moving average trend filter
+    require_ma_uptrend_for_sales: bool = False  # Only allow sales when MA is trending up
+    ma_trend_lookback: int = bb_period  # Number of periods to check for MA trend (default: 3 days)
 
 
 class BollingerBandMeanReversionTool(BaseStrategyTool):
@@ -64,6 +75,10 @@ class BollingerBandMeanReversionTool(BaseStrategyTool):
         df['bb_squeeze'] = df['bb_width'] < self.config.min_bb_width
         df['bb_expansion'] = df['bb_width'] > self.config.max_bb_width
         
+        # Moving average trend calculation
+        df['ma_trend'] = df['bb_middle'].diff(self.config.ma_trend_lookback)
+        df['ma_uptrend'] = df['ma_trend'] > 0
+        
         return df
     
     def _is_valid_entry(self, row: pd.Series, signal_type: str) -> bool:
@@ -89,25 +104,146 @@ class BollingerBandMeanReversionTool(BaseStrategyTool):
             
         return True
     
-    def _should_exit_position(self, symbol: str, current_data: pd.Series) -> bool:
-        """Check if position should be exited."""
-        position = self.portfolio.get_position(symbol)
-        if not position or position.quantity == 0:
-            return False
-            
-        # Time-based exit (if we track entry date in portfolio)
-        # Note: This would require extending the portfolio to track entry dates
-        # For now, we'll rely on the base class stop_loss/take_profit
+    def _check_bb_exit_condition(self, position, current_data: pd.Series) -> Tuple[bool, str]:
+        """
+        Check if position should exit based on Bollinger Band position.
         
-        # Bollinger Band position exit
+        Returns:
+            Tuple of (should_exit, reason)
+        """
+        if not self.config.use_bb_exit:
+            return False, ""
+            
         if position.quantity > 0:  # Long position
             if current_data['bb_position'] >= self.config.exit_threshold:
-                return True
+                if self.config.force_win_for_bb_exit and position.average_price < current_data['close']:
+                    return True, f"bb_exit_long_win_{current_data['bb_position']:.3f}"
         elif position.quantity < 0:  # Short position
             if current_data['bb_position'] <= self.config.exit_threshold:
-                return True
+                return True, f"bb_exit_short_{current_data['bb_position']:.3f}"
                 
-        return False
+        return False, ""
+    
+    def _check_take_profit_condition(self, position, current_price: float) -> Tuple[bool, str]:
+        """
+        Check if position should exit based on take profit threshold.
+        
+        Returns:
+            Tuple of (should_exit, reason)
+        """
+        if not self.config.use_take_profit or self.config.take_profit_pct is None:
+            return False, ""
+            
+        if position.quantity == 0:
+            return False, ""
+            
+        # Calculate current P&L percentage
+        if position.quantity > 0:  # Long position
+            pnl_pct = (current_price - position.average_price) / position.average_price
+            if pnl_pct >= self.config.take_profit_pct:
+                return True, f"take_profit_long_{pnl_pct:.3f}"
+        elif position.quantity < 0:  # Short position
+            pnl_pct = (position.average_price - current_price) / position.average_price
+            if pnl_pct >= self.config.take_profit_pct:
+                return True, f"take_profit_short_{pnl_pct:.3f}"
+                
+        return False, ""
+    
+    def _check_max_holding_days_condition(self, position, current_date: datetime) -> Tuple[bool, str]:
+        """
+        Check if position should exit based on maximum holding days.
+        
+        Returns:
+            Tuple of (should_exit, reason)
+        """
+        if not self.config.use_max_holding_days or self.config.max_holding_days is None:
+            return False, ""
+            
+        if position.first_trade_date is None:
+            return False, ""
+            
+        days_held = (current_date - position.first_trade_date).days
+        if days_held >= self.config.max_holding_days:
+            return True, f"max_holding_days_{days_held}"
+            
+        return False, ""
+    
+    def _check_ma_trend_condition(self, current_data: pd.Series) -> Tuple[bool, str]:
+        """
+        Check if moving average trend condition is met for sales.
+        
+        Returns:
+            Tuple of (trend_ok, reason)
+        """
+        if not self.config.require_ma_uptrend_for_sales:
+            return True, "ma_trend_not_required"
+            
+        # Check if we have enough data for trend calculation
+        if pd.isna(current_data.get('ma_uptrend')):
+            return False, "ma_trend_insufficient_data"
+            
+        # Check if MA is in uptrend
+        if current_data['ma_uptrend']:
+            return True, f"ma_uptrend_{current_data.get('ma_trend', 0):.3f}"
+        else:
+            return False, f"ma_downtrend_{current_data.get('ma_trend', 0):.3f}"
+    
+    def _should_exit_position(self, symbol: str, current_data: pd.Series, current_date: datetime) -> Tuple[bool, str, Dict]:
+        """
+        Check if position should be exited based on multiple exit conditions.
+        
+        Returns:
+            Tuple of (should_exit, reason, metadata)
+        """
+        position = self.portfolio.get_position(symbol)
+        if not position or position.quantity == 0:
+            return False, "", {}
+            
+        current_price = current_data['close']
+        exit_metadata = {
+            'bb_position': current_data.get('bb_position', None),
+            'bb_width': current_data.get('bb_width', None),
+            'current_price': current_price,
+            'average_price': position.average_price,
+            'quantity': position.quantity,
+            'days_held': (current_date - position.first_trade_date).days if position.first_trade_date else None,
+            'ma_trend': current_data.get('ma_trend', None),
+            'ma_uptrend': current_data.get('ma_uptrend', None)
+        }
+        
+        # First check if MA trend condition is met (if required)
+        ma_trend_ok, ma_trend_reason = self._check_ma_trend_condition(current_data)
+        if not ma_trend_ok:
+            # If MA trend is required but not met, don't exit
+            exit_metadata['ma_trend_blocked'] = ma_trend_reason
+            return False, f"ma_trend_blocked_{ma_trend_reason}", exit_metadata
+        
+        # Check all exit conditions
+        exit_conditions = []
+        
+        # 1. Bollinger Band exit
+        bb_exit, bb_reason = self._check_bb_exit_condition(position, current_data)
+        if bb_exit:
+            exit_conditions.append(bb_reason)
+            
+        # 2. Take profit exit
+        tp_exit, tp_reason = self._check_take_profit_condition(position, current_price)
+        if tp_exit:
+            exit_conditions.append(tp_reason)
+            
+        # 3. Max holding days exit
+        max_days_exit, max_days_reason = self._check_max_holding_days_condition(position, current_date)
+        if max_days_exit:
+            exit_conditions.append(max_days_reason)
+            
+        # If any exit condition is met, exit the position
+        if exit_conditions:
+            combined_reason = "_".join(exit_conditions)
+            exit_metadata['exit_conditions'] = exit_conditions
+            exit_metadata['ma_trend_ok'] = ma_trend_reason
+            return True, combined_reason, exit_metadata
+                
+        return False, "", exit_metadata
     
     def generate_signals(self, date: datetime) -> List[Signal]:
         """
@@ -145,7 +281,8 @@ class BollingerBandMeanReversionTool(BaseStrategyTool):
             # Check for position exits first
             position = self.portfolio.get_position(symbol)
             if position and position.quantity != 0:
-                if self._should_exit_position(symbol, indicator_row):
+                should_exit, exit_reason, exit_metadata = self._should_exit_position(symbol, indicator_row, date)
+                if should_exit:
                     signals.append(Signal(
                         symbol=symbol,
                         timestamp=date,
@@ -153,9 +290,8 @@ class BollingerBandMeanReversionTool(BaseStrategyTool):
                         strength=1.0,
                         price=row['close'],
                         metadata={
-                            'reason': 'bollinger_exit',
-                            'bb_position': indicator_row['bb_position'],
-                            'bb_width': indicator_row['bb_width']
+                            'reason': exit_reason,
+                            **exit_metadata
                         }
                     ))
                 continue
@@ -166,7 +302,7 @@ class BollingerBandMeanReversionTool(BaseStrategyTool):
                 continue
                 
             # Long entry: oversold condition
-            if (indicator_row['bb_position'] <= self.config.oversold_threshold and 
+            if (indicator_row['bb_position'] <= self.config.entry_threshold and 
                 self._is_valid_entry(indicator_row, 'long')):
                 
                 signals.append(Signal(
@@ -186,8 +322,8 @@ class BollingerBandMeanReversionTool(BaseStrategyTool):
                 # Position will be tracked by the portfolio after execution
             
             # Short entry: overbought condition
-            elif (indicator_row['bb_position'] >= self.config.overbought_threshold and 
-                  self._is_valid_entry(indicator_row, 'short')):
+            elif (indicator_row['bb_position'] >= self.config.exit_threshold and 
+                  self._is_valid_entry(indicator_row, 'short')) and self.short_allowed:
                 
                 signals.append(Signal(
                     symbol=symbol,
@@ -204,7 +340,6 @@ class BollingerBandMeanReversionTool(BaseStrategyTool):
                 ))
                 
                 # Position will be tracked by the portfolio after execution
-        
         return signals
     
     def _generate_single_symbol_signals(self, symbol: str, row: pd.Series, indicator_row: pd.Series, date: datetime) -> List[Signal]:
@@ -217,7 +352,8 @@ class BollingerBandMeanReversionTool(BaseStrategyTool):
         # Check for position exits first
         position = self.portfolio.get_position(symbol)
         if position and position.quantity != 0:
-            if self._should_exit_position(symbol, indicator_row):
+            should_exit, exit_reason, exit_metadata = self._should_exit_position(symbol, indicator_row, date)
+            if should_exit:
                 signals.append(Signal(
                     symbol=symbol,
                     timestamp=date,
@@ -225,9 +361,8 @@ class BollingerBandMeanReversionTool(BaseStrategyTool):
                     strength=1.0,
                     price=row['close'],
                     metadata={
-                        'reason': 'bollinger_exit',
-                        'bb_position': indicator_row['bb_position'],
-                        'bb_width': indicator_row['bb_width']
+                        'reason': exit_reason,
+                        **exit_metadata
                     }
                 ))
         
@@ -235,7 +370,7 @@ class BollingerBandMeanReversionTool(BaseStrategyTool):
         current_positions = len(self.portfolio.get_positions())
         if current_positions < self.config.max_positions:
             # Long entry: oversold condition
-            if (indicator_row['bb_position'] <= self.config.oversold_threshold and 
+            if (indicator_row['bb_position'] <= self.config.entry_threshold and 
                 self._is_valid_entry(indicator_row, 'long')):
                 
                 signals.append(Signal(
@@ -253,8 +388,8 @@ class BollingerBandMeanReversionTool(BaseStrategyTool):
                 ))
             
             # Short entry: overbought condition
-            elif (indicator_row['bb_position'] >= self.config.overbought_threshold and 
-                  self._is_valid_entry(indicator_row, 'short')):
+            elif (indicator_row['bb_position'] >= self.config.exit_threshold and 
+                  self._is_valid_entry(indicator_row, 'short')) and self.config.short_allowed:
                 
                 signals.append(Signal(
                     symbol=symbol,
@@ -289,7 +424,13 @@ class BollingerBandMeanReversionTool(BaseStrategyTool):
                 'volume_threshold': self.config.volume_threshold,
                 'stop_loss_pct': self.config.stop_loss_pct,
                 'take_profit_pct': self.config.take_profit_pct,
-                'max_holding_days': self.config.max_holding_days
+                'max_holding_days': self.config.max_holding_days,
+                'use_bb_exit': self.config.use_bb_exit,
+                'use_take_profit': self.config.use_take_profit,
+                'use_max_holding_days': self.config.use_max_holding_days,
+                'require_ma_uptrend_for_sales': self.config.require_ma_uptrend_for_sales,
+                'ma_trend_lookback': self.config.ma_trend_lookback,
+                'short_allowed': self.config.short_allowed
             },
             'current_positions': len(self.portfolio.get_positions()),
             'max_positions': self.config.max_positions

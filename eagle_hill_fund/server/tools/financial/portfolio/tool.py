@@ -38,7 +38,7 @@ class Trade:
     order_type: OrderType = OrderType.MARKET
     commission: float = 0.0
     trade_id: str = field(default_factory=lambda: f"trade_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}")
-    
+    reason: Optional[str] = None
     @property
     def notional_value(self) -> float:
         """Calculate the notional value of the trade."""
@@ -48,6 +48,38 @@ class Trade:
     def total_cost(self) -> float:
         """Calculate total cost including commission."""
         return self.notional_value + self.commission
+
+
+@dataclass
+class CompletedTrade:
+    """Represents a completed round-trip trade with P&L calculation."""
+    symbol: str
+    entry_timestamp: datetime
+    exit_timestamp: datetime
+    entry_price: float
+    exit_price: float
+    quantity: float
+    entry_commission: float
+    exit_commission: float
+    holding_days: int
+    pnl: float
+    pnl_pct: float
+    trade_id: str = field(default_factory=lambda: f"completed_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}")
+    reason: Optional[str] = None
+    @property
+    def total_commission(self) -> float:
+        """Total commission paid for the round trip."""
+        return self.entry_commission + self.exit_commission
+    
+    @property
+    def net_pnl(self) -> float:
+        """Net P&L after commissions."""
+        return self.pnl - self.total_commission
+    
+    @property
+    def is_winner(self) -> bool:
+        """Whether this trade was profitable."""
+        return self.net_pnl > 0
 
 
 @dataclass
@@ -130,6 +162,7 @@ class PortfolioTool:
         # Data storage
         self.positions: Dict[str, Position] = {}
         self.trades: List[Trade] = []
+        self.completed_trades: List[CompletedTrade] = []
         self.snapshots: List[PortfolioSnapshot] = []
         self.current_timestamp: Optional[datetime] = None
         
@@ -184,8 +217,28 @@ class PortfolioTool:
             position.total_commission += trade.commission
             position.last_trade_date = trade.timestamp
             
-            # Remove position if fully closed
+            # Track completed trades when position is fully closed
             if position.quantity == 0:
+                # Create completed trade record
+                holding_days = (trade.timestamp - position.first_trade_date).days if position.first_trade_date else 0
+                pnl_pct = (trade.price - position.average_price) / position.average_price if position.average_price > 0 else 0
+                
+                completed_trade = CompletedTrade(
+                    symbol=symbol,
+                    entry_timestamp=position.first_trade_date or trade.timestamp,
+                    exit_timestamp=trade.timestamp,
+                    entry_price=position.average_price,
+                    exit_price=trade.price,
+                    quantity=trade.quantity,
+                    entry_commission=position.total_commission - trade.commission,  # Previous commissions
+                    exit_commission=trade.commission,
+                    holding_days=holding_days,
+                    pnl=realized_pnl,
+                    pnl_pct=pnl_pct,
+                    reason=trade.reason
+                )
+                
+                self.completed_trades.append(completed_trade)
                 del self.positions[symbol]
     
     def execute_trade(
@@ -196,7 +249,8 @@ class PortfolioTool:
         price: float,
         timestamp: Optional[datetime] = None,
         order_type: OrderType = OrderType.MARKET,
-        commission: Optional[float] = None
+        commission: Optional[float] = None,
+        reason: Optional[str] = None
     ) -> Trade:
         """
         Execute a trade and update portfolio state.
@@ -239,7 +293,8 @@ class PortfolioTool:
             price=price,
             timestamp=timestamp,
             order_type=order_type,
-            commission=commission
+            commission=commission,
+            reason=reason
         )
         
         # Update cash balance
@@ -293,6 +348,152 @@ class PortfolioTool:
     def get_position(self, symbol: str) -> Optional[Position]:
         """Get position for a specific symbol."""
         return self.positions.get(symbol)
+    
+    def get_completed_trades(
+        self,
+        symbol: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> List[CompletedTrade]:
+        """
+        Get completed trades with optional filtering.
+        
+        Args:
+            symbol: Filter by symbol
+            start_date: Filter trades after this date
+            end_date: Filter trades before this date
+            
+        Returns:
+            List of completed trades matching criteria
+        """
+        trades = self.completed_trades
+        
+        if symbol:
+            trades = [t for t in trades if t.symbol == symbol]
+        
+        if start_date:
+            trades = [t for t in trades if t.entry_timestamp >= start_date]
+        
+        if end_date:
+            trades = [t for t in trades if t.exit_timestamp <= end_date]
+        
+        return sorted(trades, key=lambda x: x.entry_timestamp)
+    
+    def get_completed_trades_dataframe(
+        self,
+        symbol: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> pd.DataFrame:
+        """
+        Get completed trades as a DataFrame for analysis.
+        
+        Args:
+            symbol: Filter by symbol
+            start_date: Filter trades after this date
+            end_date: Filter trades before this date
+            
+        Returns:
+            DataFrame with completed trade details
+        """
+        trades = self.get_completed_trades(symbol, start_date, end_date)
+        
+        if not trades:
+            # Return empty DataFrame with proper columns
+            return pd.DataFrame(columns=[
+                'symbol', 'entry_timestamp', 'exit_timestamp', 'entry_price', 'exit_price',
+                'quantity', 'entry_commission', 'exit_commission', 'holding_days',
+                'pnl', 'pnl_pct', 'net_pnl', 'is_winner', 'trade_id'
+            ])
+        
+        # Convert to DataFrame
+        trade_data = []
+        for trade in trades:
+            trade_data.append({
+                'symbol': trade.symbol,
+                'entry_timestamp': trade.entry_timestamp,
+                'exit_timestamp': trade.exit_timestamp,
+                'entry_price': trade.entry_price,
+                'exit_price': trade.exit_price,
+                'quantity': trade.quantity,
+                'entry_commission': trade.entry_commission,
+                'exit_commission': trade.exit_commission,
+                'total_commission': trade.total_commission,
+                'holding_days': trade.holding_days,
+                'pnl': trade.pnl,
+                'pnl_pct': trade.pnl_pct,
+                'net_pnl': trade.net_pnl,
+                'is_winner': trade.is_winner,
+                'trade_id': trade.trade_id,
+                'reason': trade.reason
+            })
+        
+        df = pd.DataFrame(trade_data)
+        
+        # Add some calculated columns for analysis
+        df['entry_date'] = df['entry_timestamp'].dt.date
+        df['exit_date'] = df['exit_timestamp'].dt.date
+        df['entry_time'] = df['entry_timestamp'].dt.time
+        df['exit_time'] = df['exit_timestamp'].dt.time
+        
+        # Sort by entry timestamp
+        df = df.sort_values('entry_timestamp').reset_index(drop=True)
+        
+        return df
+    
+    def get_completed_trades_summary(self) -> pd.DataFrame:
+        """
+        Get a summary of completed trades grouped by symbol.
+        
+        Returns:
+            DataFrame with trade summary statistics by symbol
+        """
+        df = self.get_completed_trades_dataframe()
+        
+        if df.empty:
+            return pd.DataFrame(columns=[
+                'symbol', 'num_trades', 'num_winners', 'num_losers', 'win_rate',
+                'total_pnl', 'avg_pnl', 'avg_win', 'avg_loss', 'best_trade', 'worst_trade',
+                'avg_holding_days', 'total_commission'
+            ])
+        
+        # Group by symbol and calculate summary statistics
+        summary = df.groupby('symbol').agg({
+            'trade_id': 'count',  # Number of trades
+            'is_winner': ['sum', 'count'],  # Winners and total
+            'net_pnl': ['sum', 'mean', 'max', 'min'],  # P&L statistics
+            'holding_days': 'mean',  # Average holding days
+            'total_commission': 'sum'  # Total commission
+        }).round(2)
+        
+        # Flatten column names
+        summary.columns = [
+            'num_trades', 'num_winners', 'total_count', 'total_pnl', 'avg_pnl',
+            'best_trade', 'worst_trade', 'avg_holding_days', 'total_commission'
+        ]
+        
+        # Calculate derived metrics
+        summary['num_losers'] = summary['num_trades'] - summary['num_winners']
+        summary['win_rate'] = (summary['num_winners'] / summary['num_trades']).round(3)
+        
+        # Calculate average win and loss
+        winning_trades = df[df['is_winner'] == True].groupby('symbol')['net_pnl'].mean()
+        losing_trades = df[df['is_winner'] == False].groupby('symbol')['net_pnl'].mean()
+        
+        summary['avg_win'] = winning_trades.round(2)
+        summary['avg_loss'] = losing_trades.round(2)
+        
+        # Fill NaN values with 0
+        summary = summary.fillna(0)
+        
+        # Reorder columns
+        summary = summary[[
+            'num_trades', 'num_winners', 'num_losers', 'win_rate',
+            'total_pnl', 'avg_pnl', 'avg_win', 'avg_loss', 'best_trade', 'worst_trade',
+            'avg_holding_days', 'total_commission'
+        ]]
+        
+        return summary
     
     def close_position(self, symbol: str, timestamp: Optional[datetime] = None) -> Optional[Trade]:
         """
@@ -571,11 +772,13 @@ class PortfolioTool:
         drawdown = (cumulative_returns - running_max) / running_max
         max_drawdown = drawdown.min()
         
-        # Additional metrics
-        win_rate = (returns > 0).mean()
-        avg_win = returns[returns > 0].mean() if len(returns[returns > 0]) > 0 else 0
-        avg_loss = returns[returns < 0].mean() if len(returns[returns < 0]) > 0 else 0
-        profit_factor = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
+        # Trade-based metrics (using completed trades)
+        trade_metrics = self._calculate_trade_metrics()
+        
+        # Portfolio-level metrics (using daily returns)
+        portfolio_win_rate = (returns > 0).mean()
+        portfolio_avg_win = returns[returns > 0].mean() if len(returns[returns > 0]) > 0 else 0
+        portfolio_avg_loss = returns[returns < 0].mean() if len(returns[returns < 0]) > 0 else 0
         
         # Calmar ratio
         calmar_ratio = annualized_return / abs(max_drawdown) if max_drawdown != 0 else 0
@@ -612,12 +815,89 @@ class PortfolioTool:
             "sortino_ratio": sortino_ratio,
             "calmar_ratio": calmar_ratio,
             "max_drawdown": max_drawdown,
-            "win_rate": win_rate,
-            "profit_factor": profit_factor,
+            "num_trading_days": len(returns),
+            **benchmark_metrics,
+            **trade_metrics,
+            # Portfolio-level metrics (for comparison)
+            "portfolio_win_rate": portfolio_win_rate,
+            "portfolio_avg_win": portfolio_avg_win,
+            "portfolio_avg_loss": portfolio_avg_loss
+        }, df
+    
+    def _calculate_trade_metrics(self) -> Dict:
+        """
+        Calculate trade-based performance metrics.
+        
+        Returns:
+            Dictionary containing trade-based metrics
+        """
+        if not self.completed_trades:
+            return {
+                "num_completed_trades": 0,
+                "trade_win_rate": 0.0,
+                "avg_win": 0.0,
+                "avg_loss": 0.0,
+                "profit_factor": 0.0,
+                "avg_holding_days": 0.0,
+                "best_trade": 0.0,
+                "worst_trade": 0.0,
+                "total_trade_pnl": 0.0,
+                "avg_trade_pnl": 0.0
+            }
+        
+        # Separate winning and losing trades
+        winning_trades = [t for t in self.completed_trades if t.is_winner]
+        losing_trades = [t for t in self.completed_trades if not t.is_winner]
+        
+        # Basic trade statistics
+        num_trades = len(self.completed_trades)
+        num_winners = len(winning_trades)
+        num_losers = len(losing_trades)
+        
+        # Win rate
+        win_rate = num_winners / num_trades if num_trades > 0 else 0.0
+        
+        # Average win and loss
+        avg_win = np.mean([t.net_pnl for t in winning_trades]) if winning_trades else 0.0
+        avg_loss = np.mean([t.net_pnl for t in losing_trades]) if losing_trades else 0.0
+        
+        # Profit factor
+        total_wins = sum(t.net_pnl for t in winning_trades)
+        total_losses = abs(sum(t.net_pnl for t in losing_trades))
+        profit_factor = total_wins / total_losses if total_losses > 0 else float('inf')
+        
+        # Holding period statistics
+        avg_holding_days = np.mean([t.holding_days for t in self.completed_trades])
+        
+        # Best and worst trades
+        best_trade = max([t.net_pnl for t in self.completed_trades]) if self.completed_trades else 0.0
+        worst_trade = min([t.net_pnl for t in self.completed_trades]) if self.completed_trades else 0.0
+        
+        # Total and average trade P&L
+        total_trade_pnl = sum(t.net_pnl for t in self.completed_trades)
+        avg_trade_pnl = total_trade_pnl / num_trades if num_trades > 0 else 0.0
+        
+        # Additional trade statistics
+        win_pnl_pct = np.mean([t.pnl_pct for t in winning_trades]) if winning_trades else 0.0
+        loss_pnl_pct = np.mean([t.pnl_pct for t in losing_trades]) if losing_trades else 0.0
+        
+        return {
+            "num_completed_trades": num_trades,
+            "num_winning_trades": num_winners,
+            "num_losing_trades": num_losers,
+            "trade_win_rate": win_rate,
             "avg_win": avg_win,
             "avg_loss": avg_loss,
-            "num_trading_days": len(returns),
-            **benchmark_metrics
+            "profit_factor": profit_factor,
+            "avg_holding_days": avg_holding_days,
+            "best_trade": best_trade,
+            "worst_trade": worst_trade,
+            "total_trade_pnl": total_trade_pnl,
+            "avg_trade_pnl": avg_trade_pnl,
+            "avg_win_pct": win_pnl_pct,
+            "avg_loss_pct": loss_pnl_pct,
+            "total_wins_dollars": total_wins,
+            "total_losses_dollars": total_losses
         }
     
     def get_performance_attribution(self) -> Dict:
@@ -736,7 +1016,9 @@ class PortfolioTool:
             "avg_daily_trades": avg_daily_trades,
             "max_daily_trades": max_daily_trades,
             "symbol_stats": symbol_stats.to_dict(),
-            "unique_symbols": df['symbol'].nunique()
+            "unique_symbols": df['symbol'].nunique(),
+            "trade_data": df,
+            "completed_trades_data": self.get_completed_trades_dataframe()
         }
     
     def set_current_timestamp(self, timestamp: datetime) -> None:
@@ -835,7 +1117,7 @@ class PortfolioTool:
             return {"error": "No backtest data available"}
         
         # Performance metrics
-        performance = self.calculate_returns()
+        performance, df = self.calculate_returns()
         
         # Trade analysis
         trade_analysis = self.get_trade_analysis()
@@ -868,7 +1150,8 @@ class PortfolioTool:
                 "start_date": self.start_date,
                 "end_date": self.end_date,
                 "duration_days": (self.end_date - self.start_date).days if self.start_date and self.end_date else 0
-            }
+            },
+            "df": df
         }
     
     def export_to_dataframe(self) -> pd.DataFrame:

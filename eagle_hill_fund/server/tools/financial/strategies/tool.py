@@ -30,8 +30,8 @@ class StrategyConfig:
     end_date: Optional[datetime] = None
     initial_capital: float = 1000000.0
     commission_per_trade: float = 0.0
-    position_size_pct: float = 0.1  # 10% of portfolio per position
-    max_positions: int = 10
+    position_size_pct: Optional[float] = None  # If None, will default to 1/len(symbols)
+    max_positions: Optional[int] = None        # If None, will default to len(symbols)
     rebalance_frequency: str = "daily"  # daily, weekly, monthly
     stop_loss_pct: Optional[float] = None
     take_profit_pct: Optional[float] = None
@@ -88,6 +88,10 @@ class BaseStrategyTool(ABC):
         self.current_date: Optional[datetime] = None
         self.current_prices: Dict[str, float] = {}
         self.position_targets: Dict[str, float] = {}
+
+        # Set Defaults
+        self.config.position_size_pct = 1.0 / len(self.config.symbols) if self.config.position_size_pct is None else self.config.position_size_pct
+        self.config.max_positions = len(self.config.symbols) if self.config.max_positions is None else self.config.max_positions
         
     def set_data(self, data: pd.DataFrame) -> None:
         """
@@ -285,15 +289,18 @@ class BaseStrategyTool(ABC):
                             side=OrderSide.BUY,
                             quantity=quantity,
                             price=signal.price,
-                            timestamp=self.current_date
+                            timestamp=self.current_date,
+                            reason=signal.metadata["reason"]
                         )
+                        print(f"Bought {signal.symbol}; trade details: {trade}")
                         executions.append({
                             'timestamp': self.current_date,
                             'symbol': signal.symbol,
                             'action': 'buy',
                             'quantity': quantity,
                             'price': signal.price,
-                            'trade_id': trade.trade_id
+                            'trade_id': trade.trade_id,
+                            "reason": signal.metadata["reason"]
                         })
                 
                 elif signal.signal_type == 'sell':
@@ -304,15 +311,18 @@ class BaseStrategyTool(ABC):
                             side=OrderSide.SELL,
                             quantity=position.quantity,
                             price=signal.price,
-                            timestamp=self.current_date
+                            timestamp=self.current_date,
+                            reason=signal.metadata["reason"]
                         )
+                        print(f"Sold {signal.symbol}; trade details: {trade}")
                         executions.append({
                             'timestamp': self.current_date,
                             'symbol': signal.symbol,
                             'action': 'sell',
-                            'quantity': position.quantity,
+                            'quantity': trade.quantity,
                             'price': signal.price,
-                            'trade_id': trade.trade_id
+                            'trade_id': trade.trade_id,
+                            "reason": signal.metadata["reason"]
                         })
                 
             except Exception as e:
@@ -386,7 +396,7 @@ class BaseStrategyTool(ABC):
                 signals = self._generate_signals_parallel(date, parallel_tool)
             else:
                 signals = self.generate_signals(date)
-            
+            self.signals.extend(signals) 
             # Execute signals
             executions = self.execute_signals(signals)
             self.execution_log.extend(executions)
@@ -395,8 +405,10 @@ class BaseStrategyTool(ABC):
             self.portfolio.take_snapshot(date, self.current_prices)
             
             # Progress update
-            if (i + 1) % 50 == 0:
-                print(f"Processed {i + 1}/{len(dates)} dates ({date})")
+            progress_update = False
+            if progress_update:
+                if (i + 1) % 50 == 0:
+                    print(f"Processed {i + 1}/{len(dates)} dates ({date})")
         
         # Generate results
         self.backtest_results = self.portfolio.get_backtest_results()
