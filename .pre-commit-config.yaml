@@ -1,0 +1,26 @@
+# Enforced locally on every commit. Run once: `.venv311/bin/pre-commit install`
+# (No GitHub Actions by choice — see docs/ARCHITECTURE.md §Tooling.)
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.10
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(ehf/server/research|tests)/
+      - id: ruff-format
+        files: ^(ehf/server/research|tests)/
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        files: ^ehf/server/research/
+        additional_dependencies: [pydantic, pandas-stubs, types-requests]
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+        args: [--maxkb=2000]
+      - id: no-commit-to-branch
+        args: [--branch, main]

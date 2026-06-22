@@ -1,0 +1,396 @@
+# EHF Research Platform — Architecture & Walkthrough
+
+This is the map of the whole machine: how data comes in, how it's normalized,
+how backtests run, where strategies live, how every run is stored so it can be
+reproduced, and how the local SQLite store relates to AWS. Read top to bottom
+once; after that, jump to the section you need.
+
+> **Status legend:** ✅ built & tested · 🟡 next increment · ⚪ planned
+
+---
+
+## 1. Philosophy (why it's shaped this way)
+
+Four rules drive every design choice:
+
+1. **DRY, ruthlessly.** A strategy is a *thin declaration of intent* (~30–80 lines).
+   All real machinery — signals, sizing, exits, costs, accounting — is shared.
+2. **Build the platform, not the strategies.** The engine, data interface, results
+   store, and analysis suite are the load-bearing parts. The 63 tracker ideas
+   become trivial once those are right.
+3. **Never trust a backtest you can't reproduce.** Every run is persisted with its
+   full config; any result regenerates from its hash alone.
+4. **Costs and look-ahead bias are ON by default.** A zero-cost or future-peeking
+   backtest is a *bug*, available only behind an explicit, labeled toggle.
+
+---
+
+## 2. The package map
+
+One package, `ehf/`, split into `client/` (front-end, placeholder) and
+`server/`. The quant platform lives under `server/research/`; the legacy FMP/AWS
+tooling it wraps lives under `server/{integrations,tools}`. The platform reaches
+that legacy tooling through exactly one adapter (`…/data/fmp_provider.py`).
+
+```
+ehf/
+  client/                       front-end (placeholder for now)
+  server/
+    research/                   ← THE QUANT PLATFORM
+      config/      ✅ typed, hashable run specs (RunSpec, CostConfig, FillModel, UniverseSpec)
+      data/        ✅ DataProvider + FMPProvider + canonical schema + parquet cache + quality
+      results/     ✅ ExperimentRegistry + LocalResultStore (SQLite + parquet); Postgres stub
+      signals/     ✅ pure vectorized primitives (sma, ema, bollinger, atr, zscore, hurst, ...)
+      strategies/  ✅ Strategy ABC + thin subclasses (rise_fall, tsmom); sizing/exits
+      backtest/    ✅ cost-aware look-ahead-safe engine + fill models + parallel sweep
+      complexity/  ✅ measures (entropy/memory/information) + reference systems
+      analysis/    ✅ robustness (PSR/DSR/PBO/Monte-Carlo) + regime + one-call tearsheets
+      overlays/    ⚪ vol-target / regime-gate / HRP wrappers (Strategy -> Strategy)
+      execution/   ⚪ Alpaca paper/live behind one interface (seam only)
+      reporting/   ⚪ daily reports, Notion/email sync
+    integrations/  external services: financial (FMP — the data source we wrap), aws, ...
+    tools/         shared utilities: data (parallelization, HTTP client), financial (portfolio)
+tests/             ✅ unit tests, mirrors server/research (no network)
+notebooks/  scripts/  docs/          project-level (outside the package, by convention)
+data/cache/  results/                (git-ignored) local parquet cache + SQLite results
+```
+
+Import paths follow the tree, e.g. `from ehf.server.research.backtest.engine import run_backtest`.
+The dependency arrow points **one way**: `strategies → signals → data`,
+`strategies → backtest → results`. Only `…/research/data/fmp_provider.py` knows the
+vendor is FMP, and it's the sole bridge from `research` into `server/{tools,integrations}`.
+
+---
+
+## 3. How we pull data  ✅
+
+### 3.1 The one rule: everything is canonical
+
+`ehf/server/research/data/schema.py` defines the **canonical EHF bars schema** — the single,
+vendor-agnostic format that *all* EHF data takes. Backtests and analysis are
+written against this schema only. **Switching data vendors = writing one new
+adapter that emits this schema. Nothing downstream changes.** This is exactly
+the normalization guarantee you asked for.
+
+Canonical bars (long format, one row per `(symbol, bar)`):
+
+| column     | dtype                | notes                              |
+|------------|----------------------|------------------------------------|
+| `symbol`   | string               | uppercase ticker                   |
+| `timestamp`| datetime64[ns, **UTC**] | tz-aware; vendors' local time is converted |
+| `open`     | float64              | split/dividend **adjusted** by default |
+| `high`     | float64              |                                    |
+| `low`      | float64              |                                    |
+| `close`    | float64              |                                    |
+| `volume`   | float64              |                                    |
+
+Plus two metadata flags on `df.attrs`: `adjusted` (bool) and `timeframe`.
+`validate_bars()` enforces every invariant (exact columns, UTC tz, dtypes,
+sorted, deduped, `high >= low`, `volume >= 0`). Any provider's output must pass
+it — that's the contract.
+
+### 3.2 The provider interface
+
+`ehf/server/research/data/provider.py` — `DataProvider` ABC. The whole platform codes against
+this, never against FMP:
+
+```python
+provider.get_bars(symbols, start, end, timeframe="1day", adjusted=True) -> canonical bars
+provider.get_universe(name, as_of) -> Universe   # point-in-time membership
+provider.get_fundamentals(symbols, as_of)        # optional; feature-detected
+```
+
+### 3.3 The FMP adapter (the only vendor-aware code)
+
+`ehf/server/research/data/fmp_provider.py` — `FMPProvider` implements `DataProvider` by wrapping
+the **existing, unmodified** `FinancialDataCompiler` (which handles the FMP API
+key, rate limits, intraday chunking, and parallel fetch). It then funnels raw
+FMP rows through `normalize_fmp_records()` → canonical bars.
+
+```
+symbols ─► FMPProvider.get_bars
+              │  1. check parquet cache (per symbol/timeframe/adjustment)
+              │  2. fetch only the uncached symbols via FinancialDataCompiler  (FMP)
+              │  3. normalize_fmp_records()  ── maps FMP fields → canonical, US/Eastern → UTC
+              │  4. write-through to cache
+              ▼
+        canonical bars  (validated)
+```
+
+To add a vendor later (e.g. Polygon, Tiingo): write `PolygonProvider(DataProvider)`
+with its own `normalize_*` mapping into `normalize_bars(...)`. Done — backtests
+don't notice.
+
+### 3.4 The cache  ✅
+
+`ehf/server/research/data/cache.py` — `BarCache`. Write-through parquet, one file per
+`(vendor, symbol, timeframe, adjustment)` under `data/cache/`. Backtests read
+from disk; the paid API is hit only for genuinely-uncached bars. Invalidation
+strategy is documented in the module header (adjusted prices get a freshness TTL
+on the recent tail; unadjusted history is immutable; `clear()` is always safe).
+
+### 3.5 Data quality & survivorship  ✅
+
+`ehf/server/research/data/quality.py` — `check_bars()` detects missing bars (vs the business-day
+calendar), zero-volume, and duplicates, returning a `QualityReport` and emitting
+`DataQualityWarning`. `warn_survivorship()` fires whenever a universe reflects
+*today's* listings instead of point-in-time membership (FMP only gives current
+membership) — so any Russell / cross-sectional / dislocation study **warns
+loudly** rather than silently producing a biased number.
+
+---
+
+## 4. How backtests work  ✅ (walk-forward harness 🟡)
+
+`ehf/server/research/backtest/engine.py::run_backtest(spec, bars)` is the entry point. A strategy
+emits a **target-weight panel**; the engine enforces the fill model, charges
+costs, and returns a `RunResult` (equity curve, trade ledger, core metrics).
+
+- **Strategy seam:** `generate_signals(panel) → size_positions(...) → manage_exits(...)`,
+  composed by `Strategy.target_weights`.
+- **Costs default-on** via `CostConfig` (commission, slippage as ½-spread bps,
+  optional impact, short borrow). `frictionless=True` exists only as a labeled
+  debug toggle — and is forced to zero everything else.
+- **Look-ahead protection is structural:** the position held over the interval
+  starting at bar *t* is `weights.shift(1)` — the most recent decision made
+  *before* that interval. Fills default to *t+1* open (`FillModel.NEXT_OPEN`).
+  `tests/test_engine.py::test_no_lookahead_next_open` **proves** a future price
+  move can't change a prior bar's P&L; the `SAME_CLOSE` debug fill is shown
+  leaking as the contrast.
+- **Decision:** custom vectorized engine chosen over `vectorbt` — see
+  `docs/adr/0003` (Accepted). The `RunSpec → run_backtest → RunResult` seam is
+  engine-agnostic, so another engine can slot in later.
+- **Walk-forward harness** (rolling/anchored optimize→validate windows, each
+  logged to the registry) is the next piece. 🟡
+- **Accounting refinement:** wiring the engine to drive the salvaged legacy
+  `PortfolioTool` for share-level accounting is a later step; today's ledger is
+  weight-delta based.
+
+---
+
+## 5. Where & how strategies are built  ✅
+
+`ehf/server/research/strategies/` — one `Strategy` ABC; everything else is a thin subclass that
+*declares intent* and composes `ehf.server.research.signals` primitives + shared
+`sizing`/`exits` components. The engine consumes only `target_weights`.
+
+```python
+@register("rise_fall")
+class RiseFall(Strategy):
+    defaults = {"drop_pct": 0.005, "rise_pct": 0.02, "trend_window": 200, ...}
+    def generate_signals(self, panel):
+        trend_up = panel.close > signals.sma(panel.close, self.p("trend_window"))
+        atr_pct  = signals.atr(panel.high, panel.low, panel.close, self.p("atr_window")) / panel.close
+        entries  = (signals.returns(panel.close, 1) <= -atr_pct*self.p("atr_mult")) & trend_up
+        return hold_until_target(panel.close, entries.astype(float),       # shared exit component
+                                 target_pct=self.p("rise_pct"), stop_pct=self.p("stop_pct"),
+                                 max_hold=self.p("max_hold"), gate=trend_up)
+```
+
+Both reference strategies are live and thin: **Simple Rise/Fall** (`rise_fall.py`,
+~45 LOC) and **Time-Series Momentum** (`tsmom.py`, ~35 LOC, vol-scaled via the
+shared `sizing.vol_target` sleeve). Strategies self-register under their `RunSpec`
+key, so `run_backtest(RunSpec(strategy="tsmom", ...), bars)` just works.
+
+Sizing (`sizing.py`: `normalize_weights`, `vol_target`) and exits (`exits.py`:
+`hold_until_target`) are **shared, pluggable components** — picked from a menu,
+never copy-pasted. The §10 "conviction" ideas will use a separate lightweight
+`Screen` base (screens + event-study + thesis registry) on a slower cadence. 🟡
+
+---
+
+## 6. Where & how everything is stored (reproducibility)  ✅
+
+This is the part that makes the platform trustworthy. **Every run is persisted
+with enough to regenerate it from its hash alone.**
+
+### 6.1 The flow
+
+```
+RunSpec  ──.config_hash──►  ExperimentRegistry.log_run(spec, result)
+   │                              │
+   │ (typed, frozen, pydantic)    ├─► SQLite  results/ehf.db   (queryable metadata + metrics)
+   │                              └─► parquet results/<hash>/equity.parquet, trades.parquet
+   ▼
+config_hash = sha256(canonical_json(spec))[:16]   ← the unit of reproducibility
+```
+
+- **`RunSpec`** (`ehf/server/research/config/spec.py`) fully describes a backtest: strategy,
+  params, universe, date range, timeframe, capital, **cost model**, **fill
+  model**, optional `sweep_id`. It's frozen and hashable; identical spec →
+  identical `config_hash`.
+- **`ExperimentRegistry`** (`ehf/server/research/results/registry.py`) is the *only* public API.
+  It computes the hash, captures **git SHA + dirty flag** (code identity is
+  metadata, deliberately *not* part of the hash), enforces **idempotency**
+  (same hash → skip, or `versioned=True` to keep history), and writes through.
+- **`LocalResultStore`** (`ehf/server/research/results/store.py`) is the default backend.
+
+### 6.2 What's in SQLite vs parquet
+
+| Where | What | Why |
+|---|---|---|
+| **SQLite** `results/ehf.db` | `runs` (hash PK, strategy, params, universe, date range, git SHA, cost/fill model, status, sweep_id, parent_hash, spec_json, timestamp), `metrics` (long form), `sweeps`, `theses` | relational + queryable; tiny |
+| **parquet** `results/<hash>/` | `equity.parquet` (equity curve), `trades.parquet` (trade ledger) | big arrays; columnar, compressed, cheap |
+
+Raw price data is **never** stored per run — only references + derived results.
+
+### 6.3 Querying across runs (the whole point)
+
+You don't run-tweak-rerun-and-lose-history. You ask questions across all runs:
+
+```python
+reg = ExperimentRegistry()
+# "all Rise/Fall runs, best deflated-Sharpe first"
+reg.query("WHERE strategy = ? ORDER BY m_deflated_sharpe DESC", ("rise_fall",))
+# every walk-forward window of a sweep
+reg.query("WHERE sweep_id = ?", ("sweep_2026_06_21_a",))
+# every killed strategy and why
+reg.query("WHERE status = 'killed'")
+# regenerate any run from its hash — no rerun needed
+run = reg.get_run("a1b2c3d4e5f6a7b8")   # -> spec, metrics, equity curve, trade ledger
+reg.compare([h1, h2, h3])               # side-by-side metrics table
+```
+
+Metrics are pivoted into `m_<name>` columns automatically, so you can sort/filter
+on any metric. **Parameter sweeps are first-class:** every cell carries its
+`sweep_id`; explore the set with one `WHERE`.
+
+---
+
+## 7. How SQL works locally and how it reaches AWS  ✅ local / ⚪ sync
+
+**Locally** the store is plain SQLite in **WAL mode** — zero-latency, offline,
+free SQL over your full run history. No server, no network, no cost per write.
+This fits a single researcher running thousands of sweep cells on one machine.
+Heavy arrays sit beside the DB as parquet.
+
+**AWS** is for durability and the future cloud-resident execution/reporting:
+
+```
+LOCAL (research)                         AWS (durability + live, later)
+─────────────────                        ──────────────────────────────
+results/ehf.db   (SQLite WAL)   ── sync ─►  s3://<bucket>/ehf-results/   (parquet + db snapshot)
+results/<hash>/*.parquet         (explicit registry.sync(),    │
+data/cache/*.parquet              never on the write path)      ▼
+                                                       Postgres/RDS  ⟵ promotion target for
+                                                       live/paper run logging (multi-writer,
+                                                       always-on). Same ResultStore interface,
+                                                       so no strategy/harness code changes.
+```
+
+- **Why local-first SQLite, not RDS now:** the workload is single-writer, bursty
+  (a 5,000-cell sweep would be 5,000 network round-trips to Postgres), and
+  interactive. SQLite wins on latency, cost, and offline use. (Full reasoning:
+  `docs/adr/0002`.)
+- **The seam to Postgres exists today:** `ResultStore` is an ABC;
+  `PostgresResultStore` is a typed stub. When live/paper logging needs an
+  always-on multi-writer store, it drops in behind `ExperimentRegistry` — the
+  registry API and every strategy stay untouched.
+- **S3 sync** reuses the (to-be-fixed) legacy `s3Instance`; it's an explicit
+  `registry.sync()`, so backtests never block on the network.
+
+Secrets (FMP key, AWS, Alpaca) come from environment variables locally
+(`.env`, git-ignored — see `.env.example`) and from **AWS Secrets Manager** for
+deployed components. Nothing is hardcoded or committed.
+
+---
+
+## 8. Dev workflow & tooling  ✅
+
+The `ehf` package targets **Python 3.11+** (the legacy package stays on 3.9 and
+is quarantined — they meet only at the FMP adapter). One-time setup:
+
+```bash
+python3.11 -m venv .venv311
+.venv311/bin/pip install -e ".[dev]"
+.venv311/bin/pre-commit install        # ruff + mypy + hygiene on every commit
+```
+
+Day-to-day gates (all currently green):
+
+```bash
+.venv311/bin/pytest -q          # tests
+.venv311/bin/ruff check ehf tests   # lint
+.venv311/bin/ruff format ehf tests  # format
+.venv311/bin/mypy               # strict type-check on ehf/
+```
+
+`pyproject.toml` is the single source of truth (deps, ruff, mypy-strict, pytest).
+Enforcement is via **pre-commit hooks**, not GitHub Actions — by choice, for a
+solo local workflow. CI can be added later if it earns its keep; the hooks give
+the same checks at commit time.
+
+---
+
+## 9. Quickstart — prove the spine
+
+```python
+from ehf.server.research.config import RunSpec, UniverseSpec
+from ehf.server.research.results import ExperimentRegistry, RunResult
+import pandas as pd
+
+reg = ExperimentRegistry()                       # -> results/ehf.db (SQLite) + parquet
+spec = RunSpec(strategy="demo",
+               universe=UniverseSpec(symbols=("AAPL", "MSFT")),
+               start="2024-01-01", end="2024-06-30")
+
+result = RunResult(
+    metrics={"sharpe": 1.4, "max_drawdown": -0.07},
+    equity=pd.DataFrame({"timestamp": pd.date_range("2024-01-01", periods=3, tz="UTC"),
+                         "equity": [1e6, 1.01e6, 1.02e6]}),
+    trades=pd.DataFrame({"symbol": ["AAPL"], "qty": [10.0], "price": [100.0]}),
+)
+h = reg.log_run(spec, result)                    # reproducible, idempotent
+print(reg.query("ORDER BY m_sharpe DESC"))       # cross-run query
+print(reg.get_run(h)["metrics"])                 # regenerate from hash
+```
+
+Running a real backtest through the engine + logging it:
+
+```python
+from ehf.server.research.config.spec import RunSpec, UniverseSpec, CostConfig
+from ehf.server.research.backtest.engine import run_backtest
+from ehf.server.research.results.registry import ExperimentRegistry
+
+spec = RunSpec(strategy="tsmom", params={"lookback": 252, "vol_window": 63},
+               universe=UniverseSpec(symbols=("SPY", "QQQ", "IWM")),
+               start="2015-01-01", end="2024-12-31",
+               costs=CostConfig(slippage_bps=1.0))   # costs ON by default
+result = run_backtest(spec, bars)                     # -> RunResult(metrics, equity, trades)
+ExperimentRegistry().log_run(spec, result)            # reproducible + queryable
+```
+
+Pulling real data (needs `FMP_API_KEY` in `.env`):
+
+```python
+from ehf.server.research.data import Timeframe
+from ehf.server.research.data.fmp_provider import FMPProvider
+bars = FMPProvider().get_bars(["AAPL"], "2024-01-01", "2024-03-31", Timeframe.DAY)
+# -> canonical, validated, cached to data/cache/fmp/1day/adj/AAPL.parquet
+```
+
+---
+
+## 10. What's next
+
+Built and tested so far (✅): the data spine (canonical schema, FMP adapter,
+cache, quality), the results spine (RunSpec, ExperimentRegistry, SQLite+parquet),
+the **signals library**, the **Strategy framework** (+ Rise/Fall and TSMOM), and
+the **cost-aware look-ahead-safe engine** (ADR-0003 accepted). 33 tests green.
+
+Next increment, in order:
+
+1. `ehf/server/research/analysis/` — the robustness/honesty suite (Deflated Sharpe, PBO, Monte
+   Carlo, walk-forward efficiency, parameter-sensitivity, regime breakdown) and
+   one-call HTML/notebook **tearsheets** rendered from stored runs by hash.
+2. **Walk-forward harness** (`ehf/server/research/backtest/`) — rolling/anchored optimize→validate
+   windows, every window logged to the registry; plus first-class parameter
+   **sweeps** (`SweepSpec` → grid → `sweep_id`-tagged runs).
+3. A **live FMP smoke** through `FMPProvider` to validate normalization on real
+   data (uses `FMP_API_KEY`).
+4. Engine refinement: drive the salvaged legacy `PortfolioTool` for share-level
+   accounting.
+
+Then the T1/T2 tracker cards land as thin strategies, overlays
+(`ehf/server/research/overlays/`: vol-target, regime gate, HRP) compose on top, and the §10
+conviction ideas get their `Screen` base.

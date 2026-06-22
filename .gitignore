@@ -1,6 +1,16 @@
 venv/
+.venv/
+.venv311/
 .idea/
 .env
 .DS_Store
 __pycache__/
 *.egg-info/
+
+# EHF research platform local artifacts (never commit data or run results)
+data/cache/
+results/
+*.parquet
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
