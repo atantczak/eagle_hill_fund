@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+
 from ehf.server.research.complexity import reference as ref
 from ehf.server.research.complexity.measures import (
     dfa,

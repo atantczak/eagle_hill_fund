@@ -1,4 +1,4 @@
-"""Benchmark: serial vs parallel parameter sweep on real data. Run: python scripts/bench_sweep.py"""
+"""Benchmark: serial vs parallel parameter sweep on real data. Run: python ehf/server/scripts/bench_sweep.py"""
 import warnings, logging, os, time, tempfile
 warnings.filterwarnings("ignore"); logging.disable(logging.WARNING)
 from ehf.server.research.data.fmp_provider import FMPProvider

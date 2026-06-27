@@ -28,11 +28,12 @@ dev = ["pytest>=8", "ruff>=0.4", "mypy>=1.9", "pandas-stubs", "types-requests", 
 # legacy FMP/AWS tooling it wraps lives in `ehf.server.{integrations,tools}`.
 [tool.setuptools.packages.find]
 include = ["ehf*"]
+exclude = ["ehf.server.tests*"]  # tests ship with the repo, not the wheel
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["ehf/server/research", "tests"]
+src = ["ehf/server/research", "ehf/server/tests"]
 force-exclude = true
 # Lint/format only the platform + tests. The legacy server code and the client
 # placeholder are kept as-is and excluded from the modern toolchain.
@@ -60,5 +61,5 @@ module = ["scipy.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["ehf/server/tests"]
 addopts = "-q"

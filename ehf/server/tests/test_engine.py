@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+
 from ehf.server.research.backtest.engine import run_backtest
 from ehf.server.research.backtest.panel import Panel
 from ehf.server.research.config.spec import CostConfig, FillModel, RunSpec, UniverseSpec
 from ehf.server.research.strategies.base import Strategy
-
-from tests.conftest import make_daily_bars
+from ehf.server.tests.conftest import make_daily_bars
 
 
 class AlwaysLong(Strategy):

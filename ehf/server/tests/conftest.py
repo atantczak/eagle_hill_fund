@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+
 from ehf.server.research.data.fmp_provider import normalize_fmp_records
 from ehf.server.research.data.schema import Timeframe
 

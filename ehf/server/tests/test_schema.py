@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
+
 from ehf.server.research.data.schema import (
     BARS_COLUMNS,
     SchemaError,

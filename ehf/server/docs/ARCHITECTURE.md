@@ -50,9 +50,11 @@ ehf/
       reporting/   ⚪ daily reports, Notion/email sync
     integrations/  external services: financial (FMP — the data source we wrap), aws, ...
     tools/         shared utilities: data (parallelization, HTTP client), financial (portfolio)
-tests/             ✅ unit tests, mirrors server/research (no network)
-notebooks/  scripts/  docs/          project-level (outside the package, by convention)
-data/cache/  results/                (git-ignored) local parquet cache + SQLite results
+    tests/         ✅ unit tests, mirror server/research (no network)
+    docs/  notebooks/  scripts/       project assets, co-located under server/
+    var/           (git-ignored) generated runtime artifacts:
+      cache/         local parquet price cache (var/cache/fmp/<tf>/<adj>/<SYM>.parquet)
+      results/       SQLite results DB + per-run parquet (var/results/ehf.db, <hash>/*.parquet)
 ```
 
 Import paths follow the tree, e.g. `from ehf.server.research.backtest.engine import run_backtest`.
@@ -124,7 +126,7 @@ don't notice.
 ### 3.4 The cache  ✅
 
 `ehf/server/research/data/cache.py` — `BarCache`. Write-through parquet, one file per
-`(vendor, symbol, timeframe, adjustment)` under `data/cache/`. Backtests read
+`(vendor, symbol, timeframe, adjustment)` under `var/cache/`. Backtests read
 from disk; the paid API is hit only for genuinely-uncached bars. Invalidation
 strategy is documented in the module header (adjusted prices get a freshness TTL
 on the recent tail; unadjusted history is immutable; `clear()` is always safe).
@@ -154,11 +156,11 @@ costs, and returns a `RunResult` (equity curve, trade ledger, core metrics).
 - **Look-ahead protection is structural:** the position held over the interval
   starting at bar *t* is `weights.shift(1)` — the most recent decision made
   *before* that interval. Fills default to *t+1* open (`FillModel.NEXT_OPEN`).
-  `tests/test_engine.py::test_no_lookahead_next_open` **proves** a future price
+  `ehf/server/tests/test_engine.py::test_no_lookahead_next_open` **proves** a future price
   move can't change a prior bar's P&L; the `SAME_CLOSE` debug fill is shown
   leaking as the contrast.
 - **Decision:** custom vectorized engine chosen over `vectorbt` — see
-  `docs/adr/0003` (Accepted). The `RunSpec → run_backtest → RunResult` seam is
+  `adr/0003` (Accepted). The `RunSpec → run_backtest → RunResult` seam is
   engine-agnostic, so another engine can slot in later.
 - **Walk-forward harness** (rolling/anchored optimize→validate windows, each
   logged to the registry) is the next piece. 🟡
@@ -209,8 +211,8 @@ with enough to regenerate it from its hash alone.**
 ```
 RunSpec  ──.config_hash──►  ExperimentRegistry.log_run(spec, result)
    │                              │
-   │ (typed, frozen, pydantic)    ├─► SQLite  results/ehf.db   (queryable metadata + metrics)
-   │                              └─► parquet results/<hash>/equity.parquet, trades.parquet
+   │ (typed, frozen, pydantic)    ├─► SQLite  var/results/ehf.db   (queryable metadata + metrics)
+   │                              └─► parquet var/results/<hash>/equity.parquet, trades.parquet
    ▼
 config_hash = sha256(canonical_json(spec))[:16]   ← the unit of reproducibility
 ```
@@ -229,8 +231,8 @@ config_hash = sha256(canonical_json(spec))[:16]   ← the unit of reproducibilit
 
 | Where | What | Why |
 |---|---|---|
-| **SQLite** `results/ehf.db` | `runs` (hash PK, strategy, params, universe, date range, git SHA, cost/fill model, status, sweep_id, parent_hash, spec_json, timestamp), `metrics` (long form), `sweeps`, `theses` | relational + queryable; tiny |
-| **parquet** `results/<hash>/` | `equity.parquet` (equity curve), `trades.parquet` (trade ledger) | big arrays; columnar, compressed, cheap |
+| **SQLite** `var/results/ehf.db` | `runs` (hash PK, strategy, params, universe, date range, git SHA, cost/fill model, status, sweep_id, parent_hash, spec_json, timestamp), `metrics` (long form), `sweeps`, `theses` | relational + queryable; tiny |
+| **parquet** `var/results/<hash>/` | `equity.parquet` (equity curve), `trades.parquet` (trade ledger) | big arrays; columnar, compressed, cheap |
 
 Raw price data is **never** stored per run — only references + derived results.
 
@@ -269,9 +271,9 @@ Heavy arrays sit beside the DB as parquet.
 ```
 LOCAL (research)                         AWS (durability + live, later)
 ─────────────────                        ──────────────────────────────
-results/ehf.db   (SQLite WAL)   ── sync ─►  s3://<bucket>/ehf-results/   (parquet + db snapshot)
-results/<hash>/*.parquet         (explicit registry.sync(),    │
-data/cache/*.parquet              never on the write path)      ▼
+var/results/ehf.db   (SQLite WAL) ─ sync ►  s3://<bucket>/ehf-results/   (parquet + db snapshot)
+var/results/<hash>/*.parquet     (explicit registry.sync(),    │
+var/cache/*.parquet               never on the write path)      ▼
                                                        Postgres/RDS  ⟵ promotion target for
                                                        live/paper run logging (multi-writer,
                                                        always-on). Same ResultStore interface,
@@ -281,7 +283,7 @@ data/cache/*.parquet              never on the write path)      ▼
 - **Why local-first SQLite, not RDS now:** the workload is single-writer, bursty
   (a 5,000-cell sweep would be 5,000 network round-trips to Postgres), and
   interactive. SQLite wins on latency, cost, and offline use. (Full reasoning:
-  `docs/adr/0002`.)
+  `adr/0002`.)
 - **The seam to Postgres exists today:** `ResultStore` is an ABC;
   `PostgresResultStore` is a typed stub. When live/paper logging needs an
   always-on multi-writer store, it drops in behind `ExperimentRegistry` — the
@@ -310,8 +312,8 @@ Day-to-day gates (all currently green):
 
 ```bash
 .venv311/bin/pytest -q          # tests
-.venv311/bin/ruff check ehf tests   # lint
-.venv311/bin/ruff format ehf tests  # format
+.venv311/bin/ruff check ehf    # lint  (tests live under ehf/server/tests)
+.venv311/bin/ruff format ehf   # format
 .venv311/bin/mypy               # strict type-check on ehf/
 ```
 
@@ -329,7 +331,7 @@ from ehf.server.research.config import RunSpec, UniverseSpec
 from ehf.server.research.results import ExperimentRegistry, RunResult
 import pandas as pd
 
-reg = ExperimentRegistry()                       # -> results/ehf.db (SQLite) + parquet
+reg = ExperimentRegistry()                       # -> var/results/ehf.db (SQLite) + parquet
 spec = RunSpec(strategy="demo",
                universe=UniverseSpec(symbols=("AAPL", "MSFT")),
                start="2024-01-01", end="2024-06-30")
@@ -366,7 +368,7 @@ Pulling real data (needs `FMP_API_KEY` in `.env`):
 from ehf.server.research.data import Timeframe
 from ehf.server.research.data.fmp_provider import FMPProvider
 bars = FMPProvider().get_bars(["AAPL"], "2024-01-01", "2024-03-31", Timeframe.DAY)
-# -> canonical, validated, cached to data/cache/fmp/1day/adj/AAPL.parquet
+# -> canonical, validated, cached to var/cache/fmp/1day/adj/AAPL.parquet
 ```
 
 ---

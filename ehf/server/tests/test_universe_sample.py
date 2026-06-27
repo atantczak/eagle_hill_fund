@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from ehf.server.research.data.fmp_provider import sample_screen_rows
 
 

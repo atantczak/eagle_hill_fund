@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import numpy as np
+
 from ehf.server.research.backtest.engine import run_backtest
 from ehf.server.research.backtest.sweep import expand_grid, make_sweep_id, run_sweep
 from ehf.server.research.config.spec import RunSpec, UniverseSpec
 from ehf.server.research.results.registry import ExperimentRegistry
 from ehf.server.research.results.store import LocalResultStore
-
-from tests.conftest import make_daily_bars
+from ehf.server.tests.conftest import make_daily_bars
 
 
 def _bars():

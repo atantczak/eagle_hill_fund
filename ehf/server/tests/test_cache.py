@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+
 from ehf.server.research.data.cache import BarCache
 from ehf.server.research.data.schema import Timeframe, validate_bars
 

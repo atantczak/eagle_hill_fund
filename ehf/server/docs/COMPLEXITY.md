@@ -39,7 +39,7 @@ ehf/server/research/complexity/
   (cost-aware backtest, deflated Sharpe, OOS walk-forward). A complexity model that
   can't beat the cost-aware benchmark is a physics demo, not alpha — labelled as such.
 
-## Acceptance gauntlet (reproducible — `tests/test_complexity_measures.py`)
+## Acceptance gauntlet (reproducible — `ehf/server/tests/test_complexity_measures.py`)
 
 Every measure recovers ground truth before it touches price data:
 

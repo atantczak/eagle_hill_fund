@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+
 from ehf.server.research.config.spec import CostConfig, FillModel, RunSpec, UniverseSpec
 from ehf.server.research.results.registry import ExperimentRegistry, RunResult
 from ehf.server.research.results.store import LocalResultStore
