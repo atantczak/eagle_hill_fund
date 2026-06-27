@@ -16,7 +16,7 @@ from typing import Any
 import pandas as pd
 
 from ehf.server.research.config.spec import RunSpec
-from ehf.server.research.results.store import LocalResultStore, ResultStore
+from ehf.server.research.results.store import ResultStore
 
 
 @dataclass
@@ -39,7 +39,13 @@ class ExperimentRegistry:
     """Write-through, idempotent registry over a ``ResultStore``."""
 
     def __init__(self, store: ResultStore | None = None):
-        self.store = store if store is not None else LocalResultStore()
+        # Default backend is environment-driven: RDS+S3 when configured, else
+        # local SQLite+parquet (see results.config.result_store_from_env).
+        if store is None:
+            from ehf.server.research.results.config import result_store_from_env
+
+            store = result_store_from_env()
+        self.store = store
 
     def log_run(
         self,
@@ -111,14 +117,10 @@ class ExperimentRegistry:
 
         Used by the parallel sweep: computes git identity ONCE, skips runs that
         already exist (idempotent), and writes all metadata + metrics in one
-        SQLite transaction. ``items`` are ``(spec, metrics, status, kill_reason)``.
-        Returns every cell's ``config_hash``.
+        transaction. ``items`` are ``(spec, metrics, status, kill_reason)``.
+        Returns every cell's ``config_hash``. Works for any ``ResultStore``
+        backend (the bulk path is part of the contract).
         """
-        from ehf.server.research.results.store import LocalResultStore
-
-        if not isinstance(self.store, LocalResultStore):
-            raise TypeError("log_runs_bulk requires a LocalResultStore")
-
         git_sha, dirty = _git_identity()
         records: list[dict[str, Any]] = []
         metrics_map: dict[str, dict[str, float]] = {}

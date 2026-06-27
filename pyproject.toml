@@ -23,6 +23,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.4", "mypy>=1.9", "pandas-stubs", "types-requests", "pre-commit>=3.6"]
+# Cloud results backend (RDS Postgres + S3). Optional: only needed to log/read
+# runs against AWS. `pip install -e '.[rds]'`. See ehf/server/docs/RESULTS_RDS.md.
+rds = ["psycopg[binary]>=3.1", "boto3>=1.34"]
 
 # One package: `ehf`. The quant platform lives in `ehf.server.research`; the
 # legacy FMP/AWS tooling it wraps lives in `ehf.server.{integrations,tools}`.

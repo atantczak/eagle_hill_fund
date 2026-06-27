@@ -5,8 +5,10 @@ theses) lives in SQLite for cheap cross-run SQL; the heavy per-run arrays
 (equity curve, trade ledger) live in parquet keyed by ``config_hash``. Raw price
 data is never stored per run — only references + derived results.
 
-``PostgresResultStore`` is intentionally left as a typed stub: the same
-interface can back live/paper logging later without changing the registry API.
+This module holds the ``ResultStore`` contract and the local backend. The cloud
+backend (``PostgresResultStore`` — RDS Postgres + S3) implements the same
+contract in ``store_postgres`` and is selected via ``results.config`` when the
+environment is configured; nothing in the registry or strategy code changes.
 """
 
 from __future__ import annotations
@@ -76,7 +78,15 @@ CREATE TABLE IF NOT EXISTS theses (
 
 
 class ResultStore(ABC):
-    """Backend interface. ``ExperimentRegistry`` is the only caller."""
+    """Backend interface. ``ExperimentRegistry`` is the only caller.
+
+    Two concrete backends implement this: ``LocalResultStore`` (SQLite + local
+    parquet, the dev default) and ``PostgresResultStore`` (RDS Postgres + S3, the
+    cloud backend). The contract is split into a metadata path and an array path
+    so a parallel sweep can have workers write their own arrays concurrently
+    (``write_arrays``) while the parent does one bulk metadata transaction
+    (``write_metadata_bulk``) — both backends honor that split.
+    """
 
     @abstractmethod
     def has_run(self, config_hash: str) -> bool: ...
@@ -91,10 +101,35 @@ class ResultStore(ABC):
     ) -> None: ...
 
     @abstractmethod
+    def write_arrays(self, config_hash: str, equity: pd.DataFrame, trades: pd.DataFrame) -> None:
+        """Persist a run's heavy arrays (equity curve, trade ledger)."""
+
+    @abstractmethod
+    def write_metadata_bulk(
+        self, records: list[dict[str, Any]], metrics: dict[str, dict[str, float]]
+    ) -> None:
+        """Insert many runs' metadata + metrics in one transaction."""
+
+    @abstractmethod
+    def register_sweep(
+        self, sweep_id: str, strategy: str, grid: dict[str, Any], n_cells: int, created_at: str
+    ) -> None:
+        """Record a sweep's grid so its cells can be explored as a set."""
+
+    @abstractmethod
     def read_run(self, config_hash: str) -> dict[str, Any]: ...
 
     @abstractmethod
     def query(self, clause: str = "", params: tuple[Any, ...] = ()) -> pd.DataFrame: ...
+
+    @abstractmethod
+    def to_worker_descriptor(self) -> dict[str, Any]:
+        """A picklable descriptor a sweep worker uses to rebuild this store.
+
+        Workers run in separate processes (spawn) and only call ``write_arrays``;
+        the descriptor carries just enough config to reconstruct the store there.
+        Rebuilt via ``results.config.result_store_from_descriptor``.
+        """
 
 
 class LocalResultStore(ResultStore):
@@ -121,9 +156,7 @@ class LocalResultStore(ResultStore):
 
     def has_run(self, config_hash: str) -> bool:
         with self._connect() as conn:
-            cur = conn.execute(
-                "SELECT 1 FROM runs WHERE config_hash = ?", (config_hash,)
-            )
+            cur = conn.execute("SELECT 1 FROM runs WHERE config_hash = ?", (config_hash,))
             return cur.fetchone() is not None
 
     def write_arrays(self, config_hash: str, equity: pd.DataFrame, trades: pd.DataFrame) -> None:
@@ -201,12 +234,9 @@ class LocalResultStore(ResultStore):
             query("WHERE strategy = ? ORDER BY m_sharpe DESC", ("rise_fall",))
         """
         with self._connect() as conn:
-            metric_names = [
-                r["name"] for r in conn.execute("SELECT DISTINCT name FROM metrics")
-            ]
+            metric_names = [r["name"] for r in conn.execute("SELECT DISTINCT name FROM metrics")]
             pivots = ", ".join(
-                f"MAX(CASE WHEN m.name = '{n}' THEN m.value END) AS m_{n}"
-                for n in metric_names
+                f"MAX(CASE WHEN m.name = '{n}' THEN m.value END) AS m_{n}" for n in metric_names
             )
             inner_select = "r.*" + (f", {pivots}" if pivots else "")
             sql = (
@@ -229,6 +259,9 @@ class LocalResultStore(ResultStore):
             )
             conn.commit()
 
+    def to_worker_descriptor(self) -> dict[str, Any]:
+        return {"kind": "local", "root": str(self.root)}
+
 
 def _as_float(v: Any) -> float | None:
     try:
@@ -238,25 +271,6 @@ def _as_float(v: Any) -> float | None:
     return f
 
 
-class PostgresResultStore(ResultStore):  # pragma: no cover - stub
-    """Promotion target for live/paper logging (multi-writer, always-on).
-
-    Intentionally unimplemented: the interface exists so a Postgres backend can
-    drop in behind ``ExperimentRegistry`` later (see ADR-0002) without touching
-    strategy or harness code.
-    """
-
-    def __init__(self, *_: Any, **__: Any) -> None:
-        raise NotImplementedError("PostgresResultStore is a planned promotion target (ADR-0002)")
-
-    def has_run(self, config_hash: str) -> bool:
-        raise NotImplementedError
-
-    def write_run(self, record, metrics, equity, trades):  # type: ignore[no-untyped-def]
-        raise NotImplementedError
-
-    def read_run(self, config_hash: str) -> dict[str, Any]:
-        raise NotImplementedError
-
-    def query(self, clause: str = "", params: tuple[Any, ...] = ()) -> pd.DataFrame:
-        raise NotImplementedError
+# The cloud backend (RDS Postgres + S3) lives in ``store_postgres`` so that
+# psycopg/boto3 are only imported when it is actually used. Import it from there
+# or via ``results.PostgresResultStore`` (lazy) — see ADR-0002.

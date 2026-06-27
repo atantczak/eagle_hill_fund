@@ -41,3 +41,43 @@ def vol_target(
     over = gross > max_leverage
     weights.loc[over] = weights.loc[over].div(gross[over], axis=0) * max_leverage
     return weights.fillna(0.0)
+
+
+def cross_sectional_rank(
+    scores: pd.DataFrame,
+    *,
+    quantile: float = 0.2,
+    gross: float = 1.0,
+    long_short: bool = True,
+) -> pd.DataFrame:
+    """Rank the cross-section each bar; go long the top, short the bottom.
+
+    The relative-value construction behind cross-sectional momentum/value: per
+    bar, rank symbols by ``scores`` and equal-weight the top ``quantile`` long
+    against the bottom ``quantile`` short. With ``long_short`` the two legs are
+    balanced so the book nets ~zero (dollar-neutral) at gross exposure ``gross``;
+    set it False for a long-only top-quantile tilt.
+
+    Rows without a full pair of legs (e.g. a bar with too few ranked names, or
+    long-only with no names) stay flat — we never run a half-hedged book. NaN
+    scores are excluded from the ranking automatically.
+    """
+    # Percentile rank within each row; ``method="first"`` breaks ties by column
+    # order so the leg sizes stay symmetric instead of bunching at a tie.
+    ranks = scores.rank(axis=1, pct=True, method="first")
+    longs = (ranks > 1.0 - quantile).astype(float)
+    shorts = (ranks <= quantile).astype(float) if long_short else longs * 0.0
+
+    n_long = longs.sum(axis=1)
+    n_short = shorts.sum(axis=1)
+    side = gross / 2.0 if long_short else gross  # split gross across the two legs
+
+    long_w = longs.div(n_long.where(n_long > 0, 1.0), axis=0) * side
+    short_w = shorts.div(n_short.where(n_short > 0, 1.0), axis=0) * side
+    weights = (long_w - short_w).fillna(0.0)
+
+    # Flat any bar that can't form the required leg(s): both for long/short,
+    # just the long leg for long-only.
+    incomplete = (n_long == 0) | (n_short == 0) if long_short else (n_long == 0)
+    weights.loc[incomplete] = 0.0
+    return weights

@@ -32,16 +32,18 @@ from typing import Any
 import pandas as pd
 
 from ehf.server.research.config.spec import RunSpec
+from ehf.server.research.results.config import result_store_from_descriptor
 from ehf.server.research.results.registry import ExperimentRegistry
-from ehf.server.research.results.store import LocalResultStore
+from ehf.server.research.results.store import ResultStore
 
 # Set on each worker by the initializer. Bars are shared via a parquet file the
 # workers read (OS page-cached) rather than pickling the whole frame to each — a
 # big win when bars are large and there are many workers. Each worker also gets a
-# store handle so it can write its OWN equity/trades parquet (parallel, no
-# contention) and return only tiny metrics to the parent.
+# store handle (rebuilt from a backend-agnostic descriptor) so it can write its
+# OWN equity/trades arrays in parallel — local parquet or S3, no contention — and
+# return only tiny metrics to the parent.
 _WORKER_BARS: pd.DataFrame | None = None
-_WORKER_STORE: LocalResultStore | None = None
+_WORKER_STORE: ResultStore | None = None
 
 _BLAS_VARS = (
     "OMP_NUM_THREADS",
@@ -52,13 +54,15 @@ _BLAS_VARS = (
 )
 
 
-def _init_worker(bars_path: str, timeframe: str, adjusted: bool, results_root: str) -> None:
+def _init_worker(
+    bars_path: str, timeframe: str, adjusted: bool, store_descriptor: dict[str, Any]
+) -> None:
     global _WORKER_BARS, _WORKER_STORE
     bars = pd.read_parquet(bars_path)
     bars.attrs["timeframe"] = timeframe
     bars.attrs["adjusted"] = adjusted
     _WORKER_BARS = bars
-    _WORKER_STORE = LocalResultStore(results_root)
+    _WORKER_STORE = result_store_from_descriptor(store_descriptor)
 
 
 def _run_cell(spec: RunSpec) -> tuple[RunSpec, dict[str, float], str, str | None]:
@@ -117,8 +121,6 @@ def run_sweep(
         The registry query for this sweep (one row per cell, metrics as ``m_*``).
     """
     registry = registry if registry is not None else ExperimentRegistry()
-    if not isinstance(registry.store, LocalResultStore):
-        raise TypeError("run_sweep requires a registry backed by LocalResultStore")
     store = registry.store
 
     sid = sweep_id or make_sweep_id(base_spec, grid)
@@ -136,7 +138,7 @@ def run_sweep(
 
     tf = str(bars.attrs.get("timeframe", "1day"))
     adjusted = bool(bars.attrs.get("adjusted", True))
-    results_root = str(store.root)
+    store_descriptor = store.to_worker_descriptor()
     saved = _pin_blas_single_thread()
     tmpdir = tempfile.mkdtemp(prefix="ehf_sweep_")
     bars_path = os.path.join(tmpdir, "bars.parquet")
@@ -145,7 +147,7 @@ def run_sweep(
         with ProcessPoolExecutor(
             max_workers=workers,
             initializer=_init_worker,
-            initargs=(bars_path, tf, adjusted, results_root),
+            initargs=(bars_path, tf, adjusted, store_descriptor),
         ) as pool:
             # Workers compute + write their own arrays in parallel; collect the
             # tiny metrics payloads, then the parent bulk-logs metadata in ONE
