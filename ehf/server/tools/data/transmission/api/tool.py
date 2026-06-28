@@ -1,5 +1,6 @@
 import io
 import logging
+import time
 from typing import Dict, List, Optional, Union
 
 import pandas as pd
@@ -7,6 +8,22 @@ import requests
 import requests_mock
 
 from ehf.server.tools.data.transmission.tool import DataTransmissionTool
+
+# HTTP statuses worth retrying: rate-limit + transient server errors.
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+def _retry_after_seconds(response: Optional[requests.Response]) -> Optional[float]:
+    """Parse a Retry-After header (seconds form) into a float, if present."""
+    if response is None:
+        return None
+    raw = response.headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None  # HTTP-date form: fall back to exponential backoff
 
 
 class APIClient(DataTransmissionTool):
@@ -104,49 +121,61 @@ class APIClient(DataTransmissionTool):
             raise
 
     def make_api_request(
-        self, 
+        self,
         method: str,
         endpoint: Optional[str] = None,
         test: bool = False,
         timeout: int = 30,
+        max_retries: int = 4,
+        backoff_base: float = 1.5,
         **kwargs
     ) -> Union[requests.Response, Dict]:
-        """Make an API request.
+        """Make an API request, retrying rate-limit / transient errors with backoff.
+
+        On HTTP 429 (rate limit) or 5xx, waits and retries up to ``max_retries``
+        times — honoring a ``Retry-After`` header when present, else exponential
+        backoff (``backoff_base * 2**attempt``). On final/non-retryable failure it
+        RAISES the underlying ``requests`` exception, so callers see a clear error
+        (e.g. "429 Too Many Requests") instead of an error dict that their
+        ``response.json()`` would choke on with a cryptic AttributeError.
 
         Args:
             method: HTTP method (GET, POST, PUT, DELETE etc)
             endpoint: API endpoint path
             test: If True, test connection instead of making real request
             timeout: Request timeout in seconds
+            max_retries: Max retries for 429/5xx before raising
+            backoff_base: Base seconds for exponential backoff
             **kwargs: Additional arguments passed to requests.request()
 
         Returns:
-            Response object or error dict if request fails
-
-        Example:
-            response = client.make_api_request(
-                "GET",
-                "/users",
-                params={"page": 1},
-                headers={"Authorization": "Bearer token"}
-            )
+            Response object (raises ``requests.RequestException`` on failure)
         """
         url = f"{self.base_url}{endpoint}" if endpoint else self.base_url
-        
-        try:
-            if test:
-                return self.test_connection(method=method, url=url, **kwargs)
 
-            response = requests.request(
-                method=method,
-                url=url,
-                timeout=timeout,
-                **kwargs
-            )
-            response.raise_for_status()
-            return response
+        if test:
+            return self.test_connection(method=method, url=url, **kwargs)
 
-        except requests.RequestException as e:
-            error_msg = f"API request failed: {str(e)}"
-            self.logger.error(error_msg)
-            return {"error": error_msg, "details": str(e)}
+        last_exc: Optional[requests.RequestException] = None
+        for attempt in range(max_retries + 1):
+            try:
+                response = requests.request(method=method, url=url, timeout=timeout, **kwargs)
+                response.raise_for_status()
+                return response
+            except requests.RequestException as e:
+                last_exc = e
+                status = getattr(e.response, "status_code", None)
+                if status in _RETRYABLE_STATUS and attempt < max_retries:
+                    retry_after = _retry_after_seconds(e.response)
+                    delay = retry_after if retry_after is not None else backoff_base * (2 ** attempt)
+                    self.logger.warning(
+                        f"{method} {url} -> {status}; backing off {delay:.1f}s "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(delay)
+                    continue
+                break  # non-retryable, or out of retries
+
+        # Raise (don't swallow into a dict): the caller gets a clear, catchable error.
+        self.logger.error(f"API request failed after {attempt} retries: {last_exc}")
+        raise last_exc

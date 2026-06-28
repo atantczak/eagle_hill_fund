@@ -72,6 +72,7 @@ class FMPProvider(DataProvider):
     def __init__(self, cache: BarCache | None = None, *, fetch_workers: int = 16):
         self.cache = cache if cache is not None else BarCache(vendor="fmp")
         self._compiler = None  # lazy: importing legacy tooling pulls psutil etc.
+        self._delisted: list[dict[str, Any]] | None = None  # memoized delisted list
         # Bounded concurrency for intraday chunk fetches. FMP is rate-limited
         # network I/O, so this is tuned to SATURATE the rate limit, not the CPU —
         # firing hundreds of threads just earns HTTP 429s. ~16 in-flight requests
@@ -222,23 +223,40 @@ class FMPProvider(DataProvider):
         self,
         n: int,
         *,
+        as_of: str | date | None = None,
+        include_delisted: bool = True,
         seed: int | None = None,
         min_market_cap: float = 2e9,
         min_price: float = 5.0,
         min_volume: float = 1_000_000,
         exchanges: Sequence[str] = ("NASDAQ", "NYSE"),
     ) -> list[str]:
-        """Sample ``n`` random *liquid* US common stocks (current listings).
+        """Sample ``n`` random liquid US common stocks. Two modes:
 
-        Screens FMP for actively-trading, non-ETF/fund names above the given
-        liquidity floors, then samples ``n`` without replacement. Pass ``seed``
-        for a reproducible draw.
+        * ``as_of=None`` (default): sample from stocks trading *today* above the
+          liquidity floors. Fast and convenient, but **survivorship-biased** for a
+          historical backtest — names that died before today can never be drawn.
 
-        NOTE: these are *current* listings, so a historical backtest on them is
-        survivorship-biased. Bake the returned list into your ``RunSpec``'s
-        ``UniverseSpec(symbols=...)`` so the run itself stays reproducible.
+        * ``as_of="YYYY-MM-DD"`` (or a ``date``): sample from stocks that were
+          **alive on that date** — the current liquid names PLUS every company
+          that was listed on ``as_of`` and has since delisted (``include_delisted``;
+          matched by ``ipoDate <= as_of < delistedDate``). FMP serves price history
+          for those dead tickers (e.g. Lehman, SVB → ~$0), so a backtest started
+          near ``as_of`` now sees the failures, not only the survivors. This
+          removes the dominant survivorship bias.
+
+        Bake the returned list into ``UniverseSpec(symbols=...)`` so the run stays
+        reproducible; pass ``seed`` to make the *draw* reproducible too.
+
+        Honest residual limits of the FMP screener: the *survivor* set is filtered
+        on **today's** cap/price/volume (a mild look-ahead in the floors) and is
+        **not** IPO-date filtered (the screener carries no IPO date), so a name
+        that listed after ``as_of`` can still be drawn — though its pre-listing
+        bars are absent, so it can't trade before it existed. The delisted set is
+        date-correct. For a fully point-in-time universe, use a vendor PIT
+        constituent feed via ``get_universe``.
         """
-        rows = self.compiler.screen_companies(
+        active = self.compiler.screen_companies(
             market_cap_more_than=min_market_cap,
             price_more_than=min_price,
             volume_more_than=min_volume,
@@ -246,7 +264,114 @@ class FMPProvider(DataProvider):
             is_fund=False,
             is_actively_trading=True,
         )
-        return sample_screen_rows(rows, n, exchanges=exchanges, seed=seed)
+        pool = _clean_symbols(active, exchanges=exchanges)
+        if as_of is not None and include_delisted:
+            pool |= delisted_alive_on(self._delisted_companies(), as_of, exchanges=exchanges)
+        return _sample(pool, n, seed=seed)
+
+    def _delisted_companies(self, *, max_pages: int = 300) -> list[dict[str, Any]]:
+        """All FMP delisted companies (paged, memoized per instance).
+
+        FMP caps ``/delisted-companies`` at 100 rows/page regardless of ``limit``,
+        so we page until an empty response (``max_pages`` is a runaway guard).
+        Rows carry ``symbol, exchange, ipoDate, delistedDate`` — enough to know who
+        was tradeable on any historical date.
+        """
+        if self._delisted is not None:
+            return self._delisted
+        rows: list[dict[str, Any]] = []
+        for page in range(max_pages):
+            resp = self.compiler.get(
+                "/delisted-companies",
+                params={"apikey": self.compiler.api_key, "page": page, "limit": 100},
+            )
+            batch = resp.json() if hasattr(resp, "json") else resp
+            if not isinstance(batch, list) or not batch:
+                break
+            rows.extend(batch)
+        else:
+            warnings.warn(
+                f"delisted-companies paging hit the {max_pages}-page cap; "
+                "the delisted set may be truncated.",
+                DataQualityWarning,
+                stacklevel=2,
+            )
+        self._delisted = rows
+        return rows
+
+
+def _clean_symbols(
+    rows: object,
+    *,
+    exchanges: Sequence[str],
+    exchange_key: str = "exchangeShortName",
+) -> set[str]:
+    """Keep clean US common-stock tickers on the allowed exchanges (pure).
+
+    Drops share-class/odd tickers (containing '.' or '-') and anything off the
+    allowed exchanges. ``exchange_key`` differs by endpoint: the screener uses
+    ``exchangeShortName``; the delisted endpoint uses ``exchange``.
+    """
+    if not isinstance(rows, list):
+        raise TypeError(f"expected a list of screener rows, got {type(rows).__name__}")
+    allowed = {e.upper() for e in exchanges}
+    out: set[str] = set()
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        sym = r.get("symbol")
+        if not sym or "." in sym or "-" in sym:
+            continue
+        if allowed and str(r.get(exchange_key, "")).upper() not in allowed:
+            continue
+        out.add(sym)
+    return out
+
+
+def _sample(symbols: set[str] | list[str], n: int, *, seed: int | None = None) -> list[str]:
+    """Reproducible sample of ``n`` symbols without replacement (sorted output)."""
+    pool = sorted(symbols)
+    if n >= len(pool):
+        return pool
+    return sorted(random.Random(seed).sample(pool, n))
+
+
+def _is_iso_date(s: object) -> bool:
+    """True for a plausible 'YYYY-MM-DD' string (lexical date compares work then)."""
+    return isinstance(s, str) and len(s) >= 10 and s[4] == "-" and s[7] == "-"
+
+
+def delisted_alive_on(
+    rows: object,
+    as_of: str | date,
+    *,
+    exchanges: Sequence[str] = ("NASDAQ", "NYSE"),
+) -> set[str]:
+    """Symbols listed & trading on ``as_of`` that have *since* delisted (pure).
+
+    Given FMP ``/delisted-companies`` rows (``symbol, exchange, ipoDate,
+    delistedDate``), keep clean common-stock tickers on the allowed exchanges whose
+    listing window brackets the date — ``ipoDate <= as_of < delistedDate``. These
+    are exactly the names a *current* screen drops, so including them is the core
+    of the survivorship fix. ISO date strings compare lexically — no parsing.
+    """
+    if not isinstance(rows, list):
+        raise TypeError(f"expected a list of delisted rows, got {type(rows).__name__}")
+    as_of_s = as_of.isoformat() if isinstance(as_of, date) else str(as_of)[:10]
+    allowed = {e.upper() for e in exchanges}
+    out: set[str] = set()
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        sym, ipo, delisted = r.get("symbol"), r.get("ipoDate"), r.get("delistedDate")
+        if not sym or "." in sym or "-" in sym:
+            continue
+        if not (_is_iso_date(ipo) and _is_iso_date(delisted) and ipo <= as_of_s < delisted):
+            continue
+        if allowed and str(r.get("exchange", "")).upper() not in allowed:
+            continue
+        out.add(sym)
+    return out
 
 
 def sample_screen_rows(
@@ -256,29 +381,8 @@ def sample_screen_rows(
     exchanges: Sequence[str] = ("NASDAQ", "NYSE"),
     seed: int | None = None,
 ) -> list[str]:
-    """Filter screener rows to clean common-stock tickers and sample ``n``.
-
-    Pure (no network): given FMP screener rows, keep symbols on the requested
-    exchanges, drop share-class/odd tickers (containing '.' or '-'), de-dup, then
-    sample ``n`` without replacement using ``seed``. Returns a sorted list.
-    """
-    if not isinstance(rows, list):
-        raise TypeError(f"expected a list of screener rows, got {type(rows).__name__}")
-    allowed = {e.upper() for e in exchanges}
-    symbols = sorted(
-        {
-            r["symbol"]
-            for r in rows
-            if isinstance(r, dict)
-            and r.get("symbol")
-            and "." not in r["symbol"]
-            and "-" not in r["symbol"]
-            and (not allowed or str(r.get("exchangeShortName", "")).upper() in allowed)
-        }
-    )
-    if n >= len(symbols):
-        return symbols
-    return sorted(random.Random(seed).sample(symbols, n))
+    """Filter screener rows to clean common-stock tickers and sample ``n`` (pure)."""
+    return _sample(_clean_symbols(rows, exchanges=exchanges), n, seed=seed)
 
 
 def _warn_if_truncated(
