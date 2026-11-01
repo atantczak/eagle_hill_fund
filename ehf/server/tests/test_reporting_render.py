@@ -10,11 +10,20 @@ import numpy as np
 import pandas as pd
 
 from ehf.server.research.reporting.config import ReportConfig
-from ehf.server.research.reporting.deliver import s3_keys_for
+from ehf.server.research.reporting.deliver import build_email, s3_keys_for
 from ehf.server.research.reporting.evaluate import forward_returns, hits_frame, scorecard
 from ehf.server.research.reporting.fundamentals import FUNDAMENTAL_COLUMNS, merge_fundamentals
 from ehf.server.research.reporting.job import build_artifacts
-from ehf.server.research.reporting.render import md_to_html, render_html, render_markdown
+from ehf.server.research.reporting.narrative import IDEA_DISCLAIMER, split_narrative
+from ehf.server.research.reporting.pdf import render_pdf
+from ehf.server.research.reporting.render import (
+    IDEA_PLACEHOLDER,
+    hero_tiles,
+    md_to_html,
+    render_email_html,
+    render_html,
+    render_markdown,
+)
 from ehf.server.research.reporting.screens import Hit
 from ehf.server.research.reporting.snapshot import Snapshot
 from ehf.server.research.reporting.universe import fill_from_quotes, universe_from_rows
@@ -181,19 +190,104 @@ def _snapshot() -> Snapshot:
     )
 
 
+NARRATIVE = """## Market read
+Breadth is fine. Hold.
+
+## Top ideas
+1. **AAA** — cheap and clean. Invalidate below 90.
+
+## Screen notes
+Nothing notable.
+
+## Noise and caveats
+Insider feed was down.
+
+## One idea to chew on
+**The idea.** Semis are oversold but memory ≥ 2x cycle; buy the picks and shovels.
+**Why now.** AAA fell 15.0% with Piotroski 7.
+**How to validate.** Pull DRAM spot. Compare. Decide.
+**What kills it.** A guidance cut.
+**Expression.** Long AAA vs short SOXX, research size.
+"""
+
+
+def test_split_narrative_by_fixed_headings() -> None:
+    parts = split_narrative(NARRATIVE)
+    assert set(parts) == {"market_read", "top_ideas", "screen_notes", "noise", "idea"}
+    assert parts["idea"].startswith("**The idea.**") and "Expression" in parts["idea"]
+    assert parts["market_read"] == "Breadth is fine. Hold."
+    loose = split_narrative("preface\n\n### market read:\nx\n## Something else\ny")
+    assert loose["preamble"] == "preface" and loose["market_read"] == "x"
+    assert loose["other"] == "### Something else\ny"
+    assert split_narrative(None) == {} and split_narrative("") == {}
+
+
 def test_render_markdown_and_html_cover_every_section() -> None:
     snap = _snapshot()
-    md = render_markdown(snap, "## Market read\nAll good.\n- bullet **bold**\n")
-    assert "# Eagle Hill daily market report — 2026-11-02" in md
-    assert "## Research assistant read" in md and "All good." in md
+    md = render_markdown(snap, NARRATIVE)
+    assert "# Eagle Hill Fund daily market report — 2026-11-02" in md
+    assert (
+        md.index("## One idea to chew on") < md.index("## Market read") < md.index("## Market data")
+    )
+    assert IDEA_DISCLAIMER in md and "Breadth is fine." in md
     assert "Regime: risk-on" in md and "| AAA |" in md and "  - r1" in md
     assert "Nothing fired today." in md and "consensus PT 120.00 (+20.0%)" in md
     assert "Warning: insider-trading unavailable" in md
     assert "10y–2y +70bp" in md and "60.0% above 200dma" in md and "$10.0B" in md
-    html = render_html(snap, "## Market read\nAll good.")
-    assert "<h3>Market read</h3>" in html and "<b>AAA</b>" in html and "T &lt;b&gt;" in html
-    assert "AltZ" in html and "–" in html  # NaN rendered as a dash
-    assert render_html(snap, None).count("Research assistant read") == 0
+
+    page = render_html(snap, NARRATIVE)
+    assert page.startswith("<!doctype html>") and "<script" not in page and "http" not in page
+    assert "class='card idea'" in page and IDEA_DISCLAIMER in page
+    assert "<h2>Market read</h2>" in page and "<b>AAA</b>" in page and "T &lt;b&gt;" in page
+    assert "AltZ" in page and "–" in page  # NaN rendered as a dash
+    assert "class=down>-15.0%</td>" in page and "class=up>+1.5%</td>" in page
+    assert "<span class='pill on'>" in page and "<nav class=toc>" in page
+    assert "<span class='tag long'>" in page and "class='v down'>-1.0%" in page
+
+    bare = render_html(snap, None)
+    assert IDEA_PLACEHOLDER in bare and "Market read" not in bare
+    tiles = hero_tiles(snap.market)
+    assert [t.label for t in tiles][:3] == ["S&P 500 (SPY)", "SPY YTD", "VIX"]
+    assert tiles[2].tone == "down"  # VIX up 12.9% on the day is a risk-off tone
+
+
+def test_render_email_is_inline_styled_with_links() -> None:
+    snap = _snapshot()
+    links = {"html": "https://x/r.html?sig=1", "pdf": "https://x/r.pdf?sig=2"}
+    mail = render_email_html(snap, NARRATIVE, links, link_days=7)
+    assert "<style" not in mail and "https://x/r.html?sig=1" in mail and "Download PDF" in mail
+    assert "One idea to chew on" in mail and IDEA_DISCLAIMER in mail and "Top ideas" in mail
+    assert "Screen notes" not in mail  # the inbox version is a summary
+    assert "What fired" in mail and "<b>AAA</b> ↑" in mail and "Links work for 7 days" in mail
+    nolinks = render_email_html(snap, None, {})
+    assert "Open the full report" not in nolinks and IDEA_PLACEHOLDER in nolinks
+
+
+def test_render_pdf_produces_a_document() -> None:
+    snap = _snapshot()
+    pdf = render_pdf(snap, NARRATIVE)
+    assert pdf.startswith(b"%PDF-") and len(pdf) > 5_000
+    assert render_pdf(snap, None).startswith(b"%PDF-")
+
+
+def test_build_email_mime_structure() -> None:
+    msg = build_email(
+        sender="a@x.com",
+        recipients=["b@x.com"],
+        subject="s",
+        html_body="<p>hi</p>",
+        text_body="hi",
+        attachments={"r.pdf": b"%PDF-1.4 fake"},
+    )
+    parts = [p.get_content_type() for p in msg.walk()]
+    assert parts == [
+        "multipart/mixed",
+        "multipart/alternative",
+        "text/plain",
+        "text/html",
+        "application/pdf",
+    ]
+    assert msg["To"] == "b@x.com" and msg.get_payload()[1].get_filename() == "r.pdf"
 
 
 def test_md_to_html_subset() -> None:
@@ -205,16 +299,19 @@ def test_md_to_html_subset() -> None:
 
 def test_build_artifacts_round_trip() -> None:
     snap = _snapshot()
-    arts = build_artifacts(snap, "narr", "md", "<html>", ReportConfig())
+    cfg = ReportConfig(signer_key_id="AKIA", signer_secret="hush")
+    arts = build_artifacts(snap, "narr", "md", "<html>", cfg, pdf=b"%PDF-x")
     assert set(arts) == {
         "report.md",
         "report.html",
+        "report.pdf",
         "hits.json",
         "market.json",
         "universe_table.csv.gz",
         "meta.json",
         "narrative.md",
     }
+    assert b"hush" not in arts["meta.json"] and b"AKIA" not in arts["meta.json"]
     hits = json.loads(arts["hits.json"])
     assert (
         hits["data_as_of"] == "2026-10-30"

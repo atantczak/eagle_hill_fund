@@ -21,10 +21,10 @@ from pathlib import Path
 from typing import Any
 
 from ehf.server.research.reporting.config import ReportConfig
-from ehf.server.research.reporting.deliver import publish_s3, send_email
+from ehf.server.research.reporting.deliver import presign, publish_s3, s3_keys_for, send_email
 from ehf.server.research.reporting.fmp import FMPReportClient
 from ehf.server.research.reporting.narrative import write_narrative
-from ehf.server.research.reporting.render import render_html, render_markdown
+from ehf.server.research.reporting.render import render_email_html, render_html, render_markdown
 from ehf.server.research.reporting.snapshot import Snapshot, build_snapshot
 
 log = logging.getLogger(__name__)
@@ -37,7 +37,9 @@ class RunOutput:
     markdown: str
     html: str
     artifacts: dict[str, bytes]
+    pdf: bytes | None = None
     s3_objects: list[str] = field(default_factory=list)
+    links: dict[str, str] = field(default_factory=dict)  # name -> presigned URL (not logged)
     email_id: str | None = None
     local_paths: list[str] = field(default_factory=list)
 
@@ -52,13 +54,20 @@ class RunOutput:
             "timings": self.snapshot.timings,
             "warnings": self.snapshot.warnings,
             "s3_objects": self.s3_objects,
+            "pdf_bytes": len(self.pdf) if self.pdf else 0,
+            "links": sorted(self.links),
             "email_id": self.email_id,
             "local_paths": self.local_paths,
         }
 
 
 def build_artifacts(
-    snapshot: Snapshot, narrative: str | None, markdown: str, html: str, cfg: ReportConfig
+    snapshot: Snapshot,
+    narrative: str | None,
+    markdown: str,
+    html: str,
+    cfg: ReportConfig,
+    pdf: bytes | None = None,
 ) -> dict[str, bytes]:
     """Everything worth keeping from a run, as ``filename -> bytes``."""
     hits = {
@@ -74,7 +83,11 @@ def build_artifacts(
         "api_calls": snapshot.api_calls,
         "timings": snapshot.timings,
         "warnings": snapshot.warnings,
-        "config": {k: (list(v) if isinstance(v, tuple) else v) for k, v in cfg.__dict__.items()},
+        "config": {
+            k: (list(v) if isinstance(v, tuple) else v)
+            for k, v in cfg.__dict__.items()
+            if "secret" not in k and "key" not in k  # credentials never land in meta.json
+        },
         "narrative_model": cfg.anthropic_model if narrative else None,
     }
     table_csv = snapshot.table().to_csv(index=True).encode()
@@ -88,7 +101,25 @@ def build_artifacts(
     }
     if narrative:
         out["narrative.md"] = narrative.encode()
+    if pdf:
+        out["report.pdf"] = pdf
     return out
+
+
+def render_pdf_safe(snapshot: Snapshot, narrative: str | None) -> bytes | None:
+    """The PDF is a nice-to-have: a rendering bug must never cost the whole report."""
+    try:
+        from ehf.server.research.reporting.pdf import render_pdf
+    except ImportError as exc:
+        log.warning("reportlab not installed (%s); skipping PDF", exc)
+        snapshot.warnings.append("PDF skipped: reportlab not installed")
+        return None
+    try:
+        return render_pdf(snapshot, narrative)
+    except Exception as exc:  # noqa: BLE001 - degrade, don't fail the run
+        log.exception("PDF rendering failed")
+        snapshot.warnings.append(f"PDF skipped: {type(exc).__name__}: {exc}")
+        return None
 
 
 def run(
@@ -125,15 +156,24 @@ def run(
 
     markdown = render_markdown(snapshot, narrative)
     html = render_html(snapshot, narrative)
-    artifacts = build_artifacts(snapshot, narrative, markdown, html, cfg)
+    t2 = time.perf_counter()
+    pdf = render_pdf_safe(snapshot, narrative)
+    snapshot.timings["pdf"] = round(time.perf_counter() - t2, 2)
+    artifacts = build_artifacts(snapshot, narrative, markdown, html, cfg, pdf)
     out = RunOutput(
-        snapshot=snapshot, narrative=narrative, markdown=markdown, html=html, artifacts=artifacts
+        snapshot=snapshot,
+        narrative=narrative,
+        markdown=markdown,
+        html=html,
+        artifacts=artifacts,
+        pdf=pdf,
     )
 
     if out_dir is not None:
         d = Path(out_dir) / snapshot.run_date.isoformat()
         d.mkdir(parents=True, exist_ok=True)
-        for name, blob in artifacts.items():
+        extras = {"email.html": render_email_html(snapshot, narrative, {}).encode()}
+        for name, blob in {**artifacts, **extras}.items():
             p = d / name
             p.write_bytes(blob)
             out.local_paths.append(str(p))
@@ -143,16 +183,36 @@ def run(
             out.s3_objects = publish_s3(
                 cfg.s3_bucket, cfg.s3_prefix, snapshot.run_date, artifacts, region=cfg.aws_region
             )
+            keys = s3_keys_for(cfg.s3_prefix, snapshot.run_date, ["report.html", "report.pdf"])
+            wanted = {"html": keys["report.html"][0]}
+            if pdf:
+                wanted["pdf"] = keys["report.pdf"][0]
+            try:
+                out.links = presign(
+                    cfg.s3_bucket,
+                    wanted,
+                    region=cfg.aws_region,
+                    days=cfg.link_days,
+                    key_id=cfg.signer_key_id,
+                    secret=cfg.signer_secret,
+                )
+            except Exception as exc:  # noqa: BLE001 - the email still carries the PDF
+                log.exception("presigning failed")
+                snapshot.warnings.append(f"links unavailable: {type(exc).__name__}: {exc}")
         if cfg.email_from and cfg.email_to:
             regime = snapshot.market.get("index", {}).get("regime", "regime n/a")
             subject = f"EHF daily report {snapshot.run_date} — {snapshot.n_hits} hits, {regime}"
+            attachments = {f"EHF-daily-report-{snapshot.run_date}.pdf": pdf} if pdf else {}
             out.email_id = send_email(
                 sender=cfg.email_from,
                 recipients=list(cfg.email_to),
                 subject=subject,
-                html_body=html,
+                html_body=render_email_html(
+                    snapshot, narrative, out.links, link_days=cfg.link_days
+                ),
                 text_body=markdown,
                 region=cfg.aws_region,
+                attachments=attachments,
             )
     snapshot.timings["total"] = round(time.perf_counter() - t0, 2)
     return out

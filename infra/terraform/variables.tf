@@ -83,3 +83,9 @@ variable "log_retention_days" {
   type    = number
   default = 60
 }
+
+variable "link_days" {
+  description = "Validity of the presigned report links in the email (S3 maximum is 7)."
+  type        = number
+  default     = 7
+}

@@ -57,6 +57,31 @@ def _secret_value(arn: str) -> str | None:
     return None
 
 
+def _signer_keys(arn: str) -> tuple[str, str] | None:
+    """The link-signer IAM user's keys: ``{"access_key_id": .., "secret_access_key": ..}``."""
+    if arn in _cache:
+        raw = _cache[arn]
+    else:
+        import boto3
+
+        try:
+            raw = boto3.client("secretsmanager").get_secret_value(SecretId=arn)["SecretString"]
+        except Exception as exc:  # noqa: BLE001 - links degrade to short-lived ones
+            log.warning("signer secret %s unavailable: %s", arn, exc)
+            return None
+        _cache[arn] = raw
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    kid, sec = str(obj.get("access_key_id", "")), str(obj.get("secret_access_key", ""))
+    if kid and sec and not kid.upper().startswith("REPLACE"):
+        return kid, sec
+    return None
+
+
 def load_secrets() -> None:
     for env_arn, env_key in _SECRET_ENV.items():
         arn = os.getenv(env_arn)
@@ -64,6 +89,11 @@ def load_secrets() -> None:
             value = _secret_value(arn)
             if value:
                 os.environ[env_key] = value
+    signer_arn = os.getenv("EHF_REPORT_SIGNER_SECRET_ARN")
+    if signer_arn and not os.getenv("EHF_REPORT_SIGNER_KEY_ID"):
+        keys = _signer_keys(signer_arn)
+        if keys:
+            os.environ["EHF_REPORT_SIGNER_KEY_ID"], os.environ["EHF_REPORT_SIGNER_SECRET"] = keys
 
 
 def handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]:

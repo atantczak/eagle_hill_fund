@@ -28,18 +28,20 @@ resource "aws_lambda_function" "report" {
 
   environment {
     variables = {
-      EHF_FMP_SECRET_ARN        = aws_secretsmanager_secret.fmp.arn
-      EHF_ANTHROPIC_SECRET_ARN  = aws_secretsmanager_secret.anthropic.arn
-      EHF_REPORT_BUCKET         = aws_s3_bucket.reports.id
-      EHF_REPORT_PREFIX         = "daily-report"
-      EHF_REPORT_EMAIL_FROM     = var.report_email
-      EHF_REPORT_EMAIL_TO       = var.report_email
-      EHF_REPORT_MODEL          = var.narrative_model
-      EHF_REPORT_EFFORT         = var.narrative_effort
-      EHF_REPORT_MIN_MARKET_CAP = tostring(var.min_market_cap)
-      EHF_REPORT_MIN_AVG_VOLUME = tostring(var.min_avg_volume)
-      EHF_REPORT_FETCH_WORKERS  = tostring(var.fetch_workers)
-      PYTHONDONTWRITEBYTECODE   = "1"
+      EHF_FMP_SECRET_ARN           = aws_secretsmanager_secret.fmp.arn
+      EHF_ANTHROPIC_SECRET_ARN     = aws_secretsmanager_secret.anthropic.arn
+      EHF_REPORT_SIGNER_SECRET_ARN = aws_secretsmanager_secret.signer.arn
+      EHF_REPORT_LINK_DAYS         = tostring(var.link_days)
+      EHF_REPORT_BUCKET            = aws_s3_bucket.reports.id
+      EHF_REPORT_PREFIX            = "daily-report"
+      EHF_REPORT_EMAIL_FROM        = var.report_email
+      EHF_REPORT_EMAIL_TO          = var.report_email
+      EHF_REPORT_MODEL             = var.narrative_model
+      EHF_REPORT_EFFORT            = var.narrative_effort
+      EHF_REPORT_MIN_MARKET_CAP    = tostring(var.min_market_cap)
+      EHF_REPORT_MIN_AVG_VOLUME    = tostring(var.min_avg_volume)
+      EHF_REPORT_FETCH_WORKERS     = tostring(var.fetch_workers)
+      PYTHONDONTWRITEBYTECODE      = "1"
     }
   }
 

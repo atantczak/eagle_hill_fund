@@ -18,11 +18,20 @@ output "anthropic_secret_arn" {
   value = aws_secretsmanager_secret.anthropic.arn
 }
 
+output "signer_user" {
+  value = aws_iam_user.signer.name
+}
+
+output "signer_secret_arn" {
+  value = aws_secretsmanager_secret.signer.arn
+}
+
 output "next_steps" {
   value = <<-EOT
     1. Check ${var.report_email} for the SES verification email and click the link.
     2. Confirm the SNS alarm subscription email too.
     3. python infra/ops.py set-secrets            # pushes FMP_API_KEY (+ ANTHROPIC_API_KEY if set) from .env
+       python infra/ops.py rotate-signer-key     # access key for the link-signer user (7-day email links)
     4. python infra/ops.py invoke --dry-run --max-symbols 100   # smoke test
     5. python infra/ops.py invoke                 # real run: S3 + email
   EOT

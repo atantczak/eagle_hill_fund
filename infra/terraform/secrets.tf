@@ -29,3 +29,18 @@ resource "aws_secretsmanager_secret_version" "anthropic" {
     ignore_changes = [secret_string]
   }
 }
+
+# {"access_key_id": "...", "secret_access_key": "..."} for the link-signer user.
+resource "aws_secretsmanager_secret" "signer" {
+  name                    = "ehf/report-signer"
+  description             = "Access key of the read-only IAM user that presigns report links"
+  recovery_window_in_days = 7
+}
+
+resource "aws_secretsmanager_secret_version" "signer" {
+  secret_id     = aws_secretsmanager_secret.signer.id
+  secret_string = jsonencode({ access_key_id = "REPLACE_ME", secret_access_key = "REPLACE_ME" })
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}

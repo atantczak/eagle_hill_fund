@@ -7,7 +7,7 @@ from this laptop with no Docker. Account `286016340145`, region `us-east-1`.
 infra/
   terraform/        Lambda + EventBridge Scheduler + S3 + Secrets Manager + SES + SNS alarm
   build_lambda.sh   builds infra/build/lambda.zip (manylinux aarch64 wheels + ehf subset)
-  ops.py            set-secrets / invoke / logs / latest   (boto3, reads .env)
+  ops.py            set-secrets / rotate-signer-key / invoke / logs / latest   (boto3, reads .env)
 ```
 
 ## What gets created
@@ -17,7 +17,8 @@ infra/
 | Lambda (py3.11, arm64, 3 GB, 15 min) | `ehf-daily-report` | runs `ehf.server.research.reporting.lambda_handler` |
 | EventBridge Scheduler | `ehf-daily-report` | `cron(30 6 ? * MON-FRI *)` America/New_York |
 | S3 bucket | `ehf-market-reports-<acct>` | `daily-report/YYYY/MM/DD/*` + `daily-report/latest/*` + the Lambda zips |
-| Secrets Manager | `ehf/fmp`, `ehf/anthropic` | API keys; values set by `ops.py set-secrets`, never by Terraform |
+| Secrets Manager | `ehf/fmp`, `ehf/anthropic`, `ehf/report-signer` | API keys and the signer's access key; values set by `ops.py`, never by Terraform |
+| IAM user | `ehf-daily-report-signer` | read-only on the reports prefix; its key presigns the 7-day links in the email |
 | SES identity | your address | sender = recipient (SES sandbox) |
 | SNS topic + CloudWatch alarm | `ehf-daily-report-alarms` | emails you if the Lambda errors |
 | IAM roles | `…-lambda`, `…-scheduler` | least privilege: this bucket, these secrets, SES from this address |
@@ -30,6 +31,7 @@ Terraform state: `s3://ehf-results-286016340145/terraform/daily-report.tfstate` 
 infra/build_lambda.sh                                   # 1. build the zip (~1 min)
 cd infra/terraform && terraform init && terraform apply # 2. create / update everything
 python infra/ops.py set-secrets                         # 3. push keys from .env (FMP_API_KEY, ANTHROPIC_API_KEY)
+python infra/ops.py rotate-signer-key                   #    once: access key for the link-signer user
 python infra/ops.py invoke --dry-run --max-symbols 100  # 4. smoke test (no S3, no email)
 python infra/ops.py invoke                              # 5. real run
 ```
@@ -39,6 +41,17 @@ First apply only: click the SES verification link and confirm the SNS subscripti
 stores to S3, but `send_email` fails and the run reports an error.
 
 Code change → rerun steps 1-2 (`source_code_hash` redeploys only when the zip changes).
+
+## What a run produces
+
+`report.html` (self-contained dark page, opens on anything), `report.pdf` (reportlab,
+letter), `report.md`, `hits.json`, `market.json`, `universe_table.csv.gz`, `meta.json`,
+`narrative.md`. All land under `daily-report/YYYY/MM/DD/` and `daily-report/latest/`.
+The email is a short summary with the PDF attached and two presigned links (HTML, PDF)
+valid for `link_days` (7, the S3 maximum). Links are signed by the `…-signer` user's
+long-lived key because a URL signed with the Lambda's temporary role credentials dies
+with that session; if the signer key is missing the links are still generated but
+short-lived, and the attached PDF always works.
 
 ## Credentials
 

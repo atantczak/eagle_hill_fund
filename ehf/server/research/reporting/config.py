@@ -72,6 +72,12 @@ class ReportConfig:
     email_from: str | None = None
     email_to: tuple[str, ...] = field(default_factory=tuple)
     aws_region: str = "us-east-1"
+    # Presigned links to the HTML/PDF in the email. S3 caps presigned URLs at 7 days, and a
+    # URL signed with the Lambda's own (temporary) role credentials dies when those expire,
+    # so a long-lived read-only "signer" IAM user is used when its keys are configured.
+    link_days: int = 7
+    signer_key_id: str | None = None
+    signer_secret: str | None = None  # never serialised (see job.build_artifacts)
 
     # --- narrative ------------------------------------------------------------
     narrative: bool = True
@@ -94,6 +100,9 @@ class ReportConfig:
             email_from=os.getenv("EHF_REPORT_EMAIL_FROM") or None,
             email_to=email_to,
             aws_region=os.getenv("AWS_REGION", cls.aws_region),
+            link_days=_env_int("EHF_REPORT_LINK_DAYS", cls.link_days),
+            signer_key_id=os.getenv("EHF_REPORT_SIGNER_KEY_ID") or None,
+            signer_secret=os.getenv("EHF_REPORT_SIGNER_SECRET") or None,
             narrative=_env_bool("EHF_REPORT_NARRATIVE", cls.narrative),
             anthropic_model=os.getenv("EHF_REPORT_MODEL", cls.anthropic_model),
             narrative_effort=os.getenv("EHF_REPORT_EFFORT", cls.narrative_effort),
