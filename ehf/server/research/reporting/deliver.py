@@ -123,6 +123,34 @@ def _mime_for(filename: str) -> tuple[str, str]:
     return "application", "octet-stream"
 
 
+def verified_recipients(recipients: list[str], *, region: str) -> tuple[list[str], list[str]]:
+    """Split recipients into (verified, unverified) SES identities.
+
+    In the SES sandbox a single unverified address rejects the whole send, so a newly
+    added recipient who has not clicked the verification link must be dropped, not
+    allowed to block everyone else. Lookup failures count the address as verified so a
+    permissions hiccup never silences the report.
+    """
+    import boto3
+    from botocore.exceptions import ClientError  # type: ignore[import-untyped]
+
+    ses = boto3.client("sesv2", region_name=region)
+    ok: list[str] = []
+    bad: list[str] = []
+    for addr in recipients:
+        try:
+            ident = ses.get_email_identity(EmailIdentity=addr)
+            (ok if ident.get("VerifiedForSendingStatus") else bad).append(addr)
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code == "NotFoundException":
+                bad.append(addr)
+            else:
+                log.warning("could not check SES identity %s (%s); sending anyway", addr, code)
+                ok.append(addr)
+    return ok, bad
+
+
 def send_email(
     *,
     sender: str,

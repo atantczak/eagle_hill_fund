@@ -89,3 +89,9 @@ variable "link_days" {
   type        = number
   default     = 7
 }
+
+variable "report_recipients" {
+  description = "Extra recipients. Each gets an SES identity (verification email); unverified ones are skipped at send time."
+  type        = list(string)
+  default     = []
+}

@@ -35,7 +35,7 @@ resource "aws_lambda_function" "report" {
       EHF_REPORT_BUCKET            = aws_s3_bucket.reports.id
       EHF_REPORT_PREFIX            = "daily-report"
       EHF_REPORT_EMAIL_FROM        = var.report_email
-      EHF_REPORT_EMAIL_TO          = var.report_email
+      EHF_REPORT_EMAIL_TO          = join(",", distinct(concat([var.report_email], var.report_recipients)))
       EHF_REPORT_MODEL             = var.narrative_model
       EHF_REPORT_EFFORT            = var.narrative_effort
       EHF_REPORT_MIN_MARKET_CAP    = tostring(var.min_market_cap)

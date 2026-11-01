@@ -21,7 +21,13 @@ from pathlib import Path
 from typing import Any
 
 from ehf.server.research.reporting.config import ReportConfig
-from ehf.server.research.reporting.deliver import presign, publish_s3, s3_keys_for, send_email
+from ehf.server.research.reporting.deliver import (
+    presign,
+    publish_s3,
+    s3_keys_for,
+    send_email,
+    verified_recipients,
+)
 from ehf.server.research.reporting.fmp import FMPReportClient
 from ehf.server.research.reporting.narrative import write_narrative
 from ehf.server.research.reporting.render import render_email_html, render_html, render_markdown
@@ -199,13 +205,18 @@ def run(
             except Exception as exc:  # noqa: BLE001 - the email still carries the PDF
                 log.exception("presigning failed")
                 snapshot.warnings.append(f"links unavailable: {type(exc).__name__}: {exc}")
-        if cfg.email_from and cfg.email_to:
+        recipients, unverified = verified_recipients(list(cfg.email_to), region=cfg.aws_region)
+        if unverified:
+            snapshot.warnings.append(
+                f"not emailed (SES identity unverified): {', '.join(unverified)}"
+            )
+        if cfg.email_from and recipients:
             regime = snapshot.market.get("index", {}).get("regime", "regime n/a")
             subject = f"EHF daily report {snapshot.run_date} — {snapshot.n_hits} hits, {regime}"
             attachments = {f"EHF-daily-report-{snapshot.run_date}.pdf": pdf} if pdf else {}
             out.email_id = send_email(
                 sender=cfg.email_from,
-                recipients=list(cfg.email_to),
+                recipients=recipients,
                 subject=subject,
                 html_body=render_email_html(
                     snapshot, narrative, out.links, link_days=cfg.link_days

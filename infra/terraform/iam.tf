@@ -39,6 +39,12 @@ data "aws_iam_policy_document" "lambda" {
   }
 
   statement {
+    sid       = "EmailIdentityCheck"
+    actions   = ["ses:GetEmailIdentity"]
+    resources = ["*"]
+  }
+
+  statement {
     sid       = "Email"
     actions   = ["ses:SendEmail", "ses:SendRawEmail"]
     resources = ["*"]
