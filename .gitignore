@@ -14,3 +14,8 @@ ehf/server/var/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Lambda build artifacts + terraform local files
+infra/build/
+infra/terraform/.terraform/
+infra/terraform/*.tfstate*
