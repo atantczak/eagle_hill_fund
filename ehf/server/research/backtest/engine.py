@@ -10,6 +10,13 @@ at bar ``t`` is ``w.shift(1)`` — i.e. the most recent weight decided *before*
 that interval. A test (`tests/test_engine.py::test_no_lookahead`) proves a future
 price move cannot change a prior bar's P&L.
 
+Evaluation window: weights are computed on *every* bar passed in, but P&L,
+costs, trades and metrics are measured only inside ``[spec.start, spec.end]``.
+Pass extra history before ``spec.start`` as signal warm-up (the walk-forward
+harness does) — it can never leak, because the first in-window position is still
+the weight decided before that bar, and the window starts flat: establishing the
+opening position is charged like any other trade.
+
 Fill models:
   * ``NEXT_OPEN``  (default, safe): trade at next bar's open; P&L measured
     open-to-open over the holding interval.
@@ -24,6 +31,7 @@ from typing import cast
 
 import pandas as pd
 
+from ehf.server.research.backtest.metrics import core_metrics, equity_from_returns
 from ehf.server.research.backtest.panel import Panel
 from ehf.server.research.config.spec import CostConfig, FillModel, RunSpec
 from ehf.server.research.results.registry import RunResult
@@ -43,6 +51,21 @@ def run_backtest(spec: RunSpec, bars: pd.DataFrame, strategy: Strategy | None = 
     weights = weights.reindex(index=panel.index, columns=panel.symbols).fillna(0.0)
 
     gross, position = _holding_returns(weights, panel, spec.fill_model)
+
+    # Restrict accounting to the spec's evaluation window (bars before it are
+    # warm-up only). Inside the window the book starts flat, so the opening
+    # position is a real, cost-bearing trade.
+    lo, hi = evaluation_window(spec)
+    in_window = (panel.index >= lo) & (panel.index < hi)
+    if not in_window.any():
+        raise ValueError(
+            f"no bars inside the evaluation window {spec.start}..{spec.end} "
+            f"(bars span {panel.index[0].date()}..{panel.index[-1].date()})"
+        )
+    panel = panel.slice(lo, hi)
+    position = position.loc[in_window]
+    gross = gross.loc[in_window]
+
     costs = _costs(position, panel, spec.costs)
     net = (gross - costs).fillna(0.0)
     # A single period can't lose more than 100% of equity (no negative equity;
@@ -50,14 +73,24 @@ def run_backtest(spec: RunSpec, bars: pd.DataFrame, strategy: Strategy | None = 
     # print — can otherwise drive net < -1 and flip the cumprod negative.
     net = net.clip(lower=-1.0)
 
-    equity_vals = (1.0 + net).cumprod() * spec.initial_capital
-    equity = pd.DataFrame(
-        {"timestamp": net.index, "equity": equity_vals.to_numpy(), "net_return": net.to_numpy()}
-    ).reset_index(drop=True)
-
+    equity = equity_from_returns(net, spec.initial_capital)
     trades = _trade_ledger(position, panel, spec.fill_model)
-    metrics = _core_metrics(net, equity_vals, trades, panel.periods_per_year)
+    metrics = core_metrics(net, equity["equity"], trades, panel.periods_per_year)
     return RunResult(metrics=metrics, equity=equity, trades=trades)
+
+
+def evaluation_window(spec: RunSpec) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """``[lo, hi)`` UTC bounds of the spec's accounting window (``end`` inclusive)."""
+    lo = pd.Timestamp(spec.start, tz="UTC")
+    hi = pd.Timestamp(spec.end, tz="UTC") + pd.Timedelta(days=1)
+    return lo, hi
+
+
+def _position_deltas(position: pd.DataFrame) -> pd.DataFrame:
+    """Per-bar change in held weights; the first bar is a move from flat."""
+    delta = position.diff()
+    delta.iloc[0] = position.iloc[0]
+    return delta
 
 
 def _holding_returns(
@@ -87,12 +120,13 @@ def _costs(position: pd.DataFrame, panel: Panel, cfg: CostConfig) -> pd.Series:
     if cfg.frictionless:
         return pd.Series(0.0, index=position.index)
 
-    turnover = position.diff().abs().sum(axis=1).fillna(0.0)
+    deltas = _position_deltas(position).abs()
+    turnover = deltas.sum(axis=1).fillna(0.0)
     slippage = turnover * (cfg.slippage_bps / 1e4)
 
     # Commission converted to a return drag: shares ≈ turnover_notional / price.
     if cfg.commission_per_share > 0:
-        notional_turnover = position.diff().abs() * panel.close
+        notional_turnover = deltas * panel.close
         shares = (notional_turnover / panel.close).sum(axis=1).fillna(0.0)
         commission = shares * cfg.commission_per_share / panel.close.mean(axis=1)
     else:
@@ -106,7 +140,7 @@ def _costs(position: pd.DataFrame, panel: Panel, cfg: CostConfig) -> pd.Series:
 
 def _trade_ledger(position: pd.DataFrame, panel: Panel, fill: FillModel) -> pd.DataFrame:
     """One row per (bar, symbol) where the held position changes."""
-    delta = position.diff()
+    delta = _position_deltas(position)
     fill_price = panel.open if fill is FillModel.NEXT_OPEN else panel.close
     rows: list[dict[str, object]] = []
     for ts, row in delta.iterrows():
@@ -123,48 +157,3 @@ def _trade_ledger(position: pd.DataFrame, panel: Panel, fill: FillModel) -> pd.D
             )
     cols = ["timestamp", "symbol", "delta_weight", "side", "price"]
     return pd.DataFrame(rows, columns=cols)
-
-
-def _core_metrics(
-    net: pd.Series, equity: pd.Series, trades: pd.DataFrame, ppy: float
-) -> dict[str, float]:
-    """Return/risk core. Robustness suite (DSR/PBO/MC) lands in ehf.server.research.analysis."""
-    net = net.dropna()
-    n = len(net)
-    if n == 0 or equity.empty:
-        return {"n_bars": 0.0}
-
-    growth = float(equity.iloc[-1] / equity.iloc[0]) if equity.iloc[0] else 0.0
-    total_return = growth - 1.0
-    years = n / ppy
-    if years > 0 and growth > 0:
-        cagr = float(growth ** (1.0 / years) - 1.0)
-    else:
-        # growth <= 0 means the account was wiped out -> -100% CAGR (and avoids
-        # raising a negative base to a fractional power, which returns complex).
-        cagr = -1.0 if growth <= 0 else 0.0
-    ann_vol = float(net.std() * (ppy**0.5))
-    sharpe = float(net.mean() / net.std() * (ppy**0.5)) if net.std() > 0 else 0.0
-    downside = net[net < 0].std()
-    sortino = float(net.mean() / downside * (ppy**0.5)) if downside and downside > 0 else 0.0
-
-    running_max = equity.cummax()
-    drawdown = equity / running_max - 1.0
-    max_dd = float(drawdown.min())
-    calmar = float(cagr / abs(max_dd)) if max_dd < 0 else 0.0
-
-    return {
-        "n_bars": float(n),
-        "total_return": total_return,
-        "cagr": cagr,
-        "ann_vol": ann_vol,
-        "sharpe": sharpe,
-        "sortino": sortino,
-        "max_drawdown": max_dd,
-        "calmar": calmar,
-        "hit_rate": float((net > 0).mean()),
-        "n_trades": float(len(trades)),
-        "avg_turnover": (
-            float(trades["delta_weight"].abs().sum()) / n if not trades.empty else 0.0
-        ),
-    }

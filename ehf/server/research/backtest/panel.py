@@ -37,6 +37,18 @@ class Panel:
     def index(self) -> pd.DatetimeIndex:
         return self.close.index  # type: ignore[return-value]
 
+    def slice(self, lo: pd.Timestamp, hi: pd.Timestamp) -> Panel:
+        """Rows with ``lo <= timestamp < hi`` (all fields, same symbols)."""
+        mask = (self.index >= lo) & (self.index < hi)
+        return Panel(
+            open=self.open.loc[mask],
+            high=self.high.loc[mask],
+            low=self.low.loc[mask],
+            close=self.close.loc[mask],
+            volume=self.volume.loc[mask],
+            timeframe=self.timeframe,
+        )
+
     @classmethod
     def from_bars(cls, bars: pd.DataFrame) -> Panel:
         """Pivot canonical bars into aligned wide OHLCV frames."""

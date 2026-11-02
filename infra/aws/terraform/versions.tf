@@ -25,7 +25,7 @@ provider "aws" {
     tags = {
       Project   = "ehf-daily-report"
       ManagedBy = "terraform"
-      Repo      = "eagle_hill_fund/infra/terraform"
+      Repo      = "eagle_hill_fund/infra/aws/terraform"
     }
   }
 }

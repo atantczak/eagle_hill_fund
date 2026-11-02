@@ -21,9 +21,7 @@ from typing import Any
 
 import pandas as pd
 
-# Generated runtime artifacts live under ehf/server/var/, anchored to the
-# package so the default holds regardless of the caller's working directory.
-DEFAULT_RESULTS_DIR = Path(__file__).resolve().parents[2] / "var" / "results"
+from ehf.server.research.paths import RESULTS_DIR as DEFAULT_RESULTS_DIR
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (

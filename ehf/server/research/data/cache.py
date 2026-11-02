@@ -22,10 +22,7 @@ from pathlib import Path
 import pandas as pd
 
 from ehf.server.research.data.schema import BARS_COLUMNS, Timeframe, validate_bars
-
-# Generated runtime artifacts live under ehf/server/var/, anchored to the
-# package so the default holds regardless of the caller's working directory.
-DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[2] / "var" / "cache"
+from ehf.server.research.paths import CACHE_DIR as DEFAULT_CACHE_DIR
 
 
 class BarCache:

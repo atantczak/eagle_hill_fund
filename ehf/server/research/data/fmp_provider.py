@@ -151,10 +151,18 @@ class FMPProvider(DataProvider):
     ) -> pd.DataFrame:
         """Hit the wrapped FMP tooling and normalize. Isolated for mocking."""
         if tf is Timeframe.DAY:
-            # Daily isn't chunked; the compiler already fans symbols out in parallel.
-            raw = self.compiler.compile_price_data(
-                symbols=symbols, from_date=start, to_date=end, interval=_FMP_INTERVAL[tf]
-            )
+            # FMP caps a daily request at 5,000 rows (~19.8 years) and silently
+            # returns only the most recent ones, so long ranges are fetched in
+            # date chunks and unioned. Within a chunk the compiler fans symbols
+            # out in parallel.
+            parts = []
+            for c_start, c_end in daily_chunks(start, end):
+                part = self.compiler.compile_price_data(
+                    symbols=symbols, from_date=c_start, to_date=c_end, interval=_FMP_INTERVAL[tf]
+                )
+                if part is not None and len(part):
+                    parts.append(part)
+            raw = pd.concat(parts, ignore_index=True) if parts else None
         else:
             # Intraday: fetch every (symbol, chunk) concurrently in one bounded pool.
             raw = self._fetch_intraday_parallel(symbols, start, end, _FMP_INTERVAL[tf])
@@ -201,15 +209,75 @@ class FMPProvider(DataProvider):
         return pd.DataFrame(all_rows)
 
     def get_universe(self, name: str, as_of: str | date) -> Universe:
-        """Build a universe from FMP's screener / stock list.
+        """Resolve a named universe through FMP.
 
-        FMP only exposes CURRENT membership, so any historical ``as_of`` is
-        survivorship-biased — we warn and flag it.
+        * ``sp500``: true point-in-time membership, rebuilt from today's list and
+          the constituent-change log (``survivorship_safe=True``).
+        * ``us_liquid``: the current screener above the shared liquidity floors
+          (``ehf.server.research.data.universes.US_LIQUID``). FMP only exposes
+          CURRENT membership here, so a historical ``as_of`` is survivorship-biased:
+          we warn and flag it.
+        * anything else: the legacy screener / stock list (also current-only).
         """
-        symbols = self._screen_symbols(name)
-        warn_survivorship(name, as_of)
         as_of_d = as_of if isinstance(as_of, date) else date.fromisoformat(str(as_of))
-        return Universe(name=name, as_of=as_of_d, symbols=symbols, survivorship_safe=False)
+        key = name.lower()
+        if key == "sp500":
+            from ehf.server.research.data.universes import sp500_members_as_of
+
+            members = sp500_members_as_of(self._sp500_current(), self._sp500_changes(), as_of_d)
+            return Universe(
+                name=key, as_of=as_of_d, symbols=sorted(members), survivorship_safe=True
+            )
+        if key == "us_liquid":
+            from ehf.server.research.data.universes import US_LIQUID
+
+            rows = self.compiler.screen_companies(
+                market_cap_more_than=US_LIQUID.min_market_cap,
+                price_more_than=US_LIQUID.min_price,
+                volume_more_than=US_LIQUID.min_volume,
+                is_etf=False,
+                is_fund=False,
+                is_actively_trading=True,
+            )
+            symbols = sorted(_clean_symbols(rows, exchanges=US_LIQUID.exchanges))
+        else:
+            symbols = self._screen_symbols(name)
+        warn_survivorship(name, as_of)
+        return Universe(name=key, as_of=as_of_d, symbols=symbols, survivorship_safe=False)
+
+    def _sp500_current(self) -> list[str]:
+        rows = self._json("/sp500-constituent")
+        return [str(r["symbol"]) for r in rows if isinstance(r, dict) and r.get("symbol")]
+
+    def _sp500_changes(self) -> list[dict[str, Any]]:
+        return [r for r in self._json("/historical-sp500-constituent") if isinstance(r, dict)]
+
+    def _json(self, endpoint: str, **params: Any) -> list[Any]:
+        """GET a JSON-list endpoint through the wrapped client (adds the API key)."""
+        resp = self.compiler.get(endpoint, params={"apikey": self.compiler.api_key, **params})
+        body = resp.json() if hasattr(resp, "json") else resp
+        return body if isinstance(body, list) else []
+
+    def fetch_and_cache(
+        self,
+        symbols: list[str],
+        start: str | date,
+        end: str | date,
+        timeframe: Timeframe | str = Timeframe.DAY,
+        *,
+        adjusted: bool = True,
+    ) -> pd.DataFrame:
+        """Force-fetch ``symbols`` from the vendor and merge into the cache.
+
+        Bypasses the coverage check (``get_bars`` only fetches what the cache
+        lacks); the nightly refresh uses this for symbols whose cached tail is
+        stale. Returns the fetched canonical bars (possibly empty).
+        """
+        tf = Timeframe(timeframe) if not isinstance(timeframe, Timeframe) else timeframe
+        fetched = self._fetch([s.upper() for s in symbols], str(start), str(end), tf, adjusted)
+        if not fetched.empty:
+            self.cache.write(fetched, tf, adjusted)
+        return fetched
 
     def _screen_symbols(self, name: str) -> list[str]:
         """Resolve a universe name to symbols via the wrapped FMP screener."""
@@ -298,6 +366,30 @@ class FMPProvider(DataProvider):
             )
         self._delisted = rows
         return rows
+
+
+DAILY_ROW_CAP = 5_000  # FMP: max rows per historical-price-eod request
+DAILY_CHUNK_YEARS = 15  # comfortably under the cap (~252 sessions/year)
+
+
+def daily_chunks(start: str, end: str, years: int = DAILY_CHUNK_YEARS) -> list[tuple[str, str]]:
+    """Split ``[start, end]`` into consecutive inclusive date ranges of ``years`` (pure).
+
+    FMP returns at most ``DAILY_ROW_CAP`` daily rows per request — the most
+    recent ones — so a 25-year request silently loses its first years. Chunking
+    keeps every request under the cap; the cache merge unions the pieces.
+    """
+    lo = pd.Timestamp(start)
+    hi = pd.Timestamp(end)
+    if hi < lo:
+        return []
+    out: list[tuple[str, str]] = []
+    cur = lo
+    while cur <= hi:
+        nxt = min(cur + pd.DateOffset(years=years) - pd.Timedelta(days=1), hi)
+        out.append((cur.date().isoformat(), nxt.date().isoformat()))
+        cur = nxt + pd.Timedelta(days=1)
+    return out
 
 
 def _clean_symbols(

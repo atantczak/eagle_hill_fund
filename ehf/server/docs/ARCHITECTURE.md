@@ -39,22 +39,31 @@ ehf/
     research/                   ← THE QUANT PLATFORM
       config/      ✅ typed, hashable run specs (RunSpec, CostConfig, FillModel, UniverseSpec)
       data/        ✅ DataProvider + FMPProvider + canonical schema + parquet cache + quality
+                      + named universes (ETF baskets, us_liquid, point-in-time sp500) + nightly refresh
       results/     ✅ ExperimentRegistry + LocalResultStore (SQLite + parquet); Postgres stub
       signals/     ✅ pure vectorized primitives (sma, ema, bollinger, atr, zscore, hurst, ...)
       strategies/  ✅ Strategy ABC + thin subclasses (rise_fall, tsmom); sizing/exits
-      backtest/    ✅ cost-aware look-ahead-safe engine + fill models + parallel sweep
+      backtest/    ✅ cost-aware look-ahead-safe engine + fill models + parallel sweep + walk-forward
       complexity/  ✅ measures (entropy/memory/information) + reference systems
-      analysis/    ✅ robustness (PSR/DSR/PBO/Monte-Carlo) + regime + one-call tearsheets
+      analysis/    ✅ robustness (PSR/DSR/PBO/Monte-Carlo) + regime + tearsheets + the gauntlet
       overlays/    ⚪ vol-target / regime-gate / HRP wrappers (Strategy -> Strategy)
       execution/   ⚪ Alpaca paper/live behind one interface (seam only)
-      reporting/   ⚪ daily reports, Notion/email sync
+      reporting/   ✅ daily market report (screens + Claude narrative), deployed on Lambda
+      jobs/        ✅ schedulable entrypoints (refresh_data, ...) + shared job runtime
+      paths.py     ✅ the one anchor for every var/ path
     integrations/  external services: financial (FMP — the data source we wrap), aws, ...
     tools/         shared utilities: data (parallelization, HTTP client), financial (portfolio)
     tests/         ✅ unit tests, mirror server/research (no network)
     docs/  notebooks/  scripts/       project assets, co-located under server/
-    var/           (git-ignored) generated runtime artifacts:
+    var/           (git-ignored) generated runtime artifacts (paths in research/paths.py):
       cache/         local parquet price cache (var/cache/fmp/<tf>/<adj>/<SYM>.parquet)
       results/       SQLite results DB + per-run parquet (var/results/ehf.db, <hash>/*.parquet)
+      universe/      daily point-in-time universe snapshots (<name>/<date>.parquet)
+      log/  run/     job logs, lock files, last-run summaries
+      scorecards/    walk-forward + gauntlet scorecards
+infra/
+  aws/             Terraform + build + ops for everything that runs in AWS (the daily report)
+  studio/          the Mac Studio as research server: launchd jobs from one table (jobs.py)
 ```
 
 Import paths follow the tree, e.g. `from ehf.server.research.backtest.engine import run_backtest`.
@@ -142,7 +151,7 @@ loudly** rather than silently producing a biased number.
 
 ---
 
-## 4. How backtests work  ✅ (walk-forward harness 🟡)
+## 4. How backtests work  ✅ (walk-forward harness ✅)
 
 `ehf/server/research/backtest/engine.py::run_backtest(spec, bars)` is the entry point. A strategy
 emits a **target-weight panel**; the engine enforces the fill model, charges
@@ -162,8 +171,23 @@ costs, and returns a `RunResult` (equity curve, trade ledger, core metrics).
 - **Decision:** custom vectorized engine chosen over `vectorbt` — see
   `adr/0003` (Accepted). The `RunSpec → run_backtest → RunResult` seam is
   engine-agnostic, so another engine can slot in later.
-- **Walk-forward harness** (rolling/anchored optimize→validate windows, each
-  logged to the registry) is the next piece. 🟡
+- **Evaluation window:** the engine computes weights on every bar it is given
+  but accounts P&L/costs/trades only inside `[spec.start, spec.end]`; bars before
+  `start` are signal warm-up. The window starts flat, so the opening position is a
+  real, cost-bearing trade. This is what lets walk-forward test windows carry
+  lookback history without leaking.
+- **Walk-forward harness** (`backtest/walkforward.py`) ✅ — `WalkForwardSpec`
+  (train/test months, rolling or anchored, warm-up bars, objective, cost-stress
+  multipliers) tiles non-overlapping test windows; each window's optimize step is
+  a `run_sweep`, the winner is validated with `run_backtest` on the untouched test
+  slice, and the stitched out-of-sample curve is logged as its own run
+  (`status='walk_forward'`, `sweep_id=<wf_id>`). Every train cell, OOS run and
+  2x-cost twin is in the registry under deterministic ids (`<wf_id>:w03:train`,
+  `<wf_id>:oos`, `<wf_id>:oos:x2`). See ADR-0004.
+- **The gauntlet** (`analysis/gauntlet.py`) ✅ — fixed kill criteria
+  (`GauntletConfig`: OOS Sharpe, PSR, Deflated Sharpe vs. every trial, walk-forward
+  efficiency, PBO, 2x-cost survival, trades, share of positive windows, regime
+  breadth) turn a walk-forward result into a `Verdict` with one row per check.
 - **Accounting refinement:** wiring the engine to drive the salvaged legacy
   `PortfolioTool` for share-level accounting is a later step; today's ledger is
   weight-delta based.
@@ -375,24 +399,20 @@ bars = FMPProvider().get_bars(["AAPL"], "2024-01-01", "2024-03-31", Timeframe.DA
 
 ## 10. What's next
 
-Built and tested so far (✅): the data spine (canonical schema, FMP adapter,
-cache, quality), the results spine (RunSpec, ExperimentRegistry, SQLite+parquet),
-the **signals library**, the **Strategy framework** (+ Rise/Fall and TSMOM), and
-the **cost-aware look-ahead-safe engine** (ADR-0003 accepted). 33 tests green.
+Built and tested: the data spine, the results spine, signals, the Strategy
+framework (5 strategies), the engine, parallel sweeps, the analysis suite, the
+**walk-forward harness and gauntlet**, named universes with point-in-time S&P 500,
+the nightly data refresh, the daily market report (AWS), and the Studio scheduler.
 
-Next increment, in order:
+The standing programme — what gets researched, in what order, under which kill
+criteria, and how the Studio runs it nightly — lives in
+[`RESEARCH_PROGRAM.md`](RESEARCH_PROGRAM.md). Next increments, in order:
 
-1. `ehf/server/research/analysis/` — the robustness/honesty suite (Deflated Sharpe, PBO, Monte
-   Carlo, walk-forward efficiency, parameter-sensitivity, regime breakdown) and
-   one-call HTML/notebook **tearsheets** rendered from stored runs by hash.
-2. **Walk-forward harness** (`ehf/server/research/backtest/`) — rolling/anchored optimize→validate
-   windows, every window logged to the registry; plus first-class parameter
-   **sweeps** (`SweepSpec` → grid → `sweep_id`-tagged runs).
-3. A **live FMP smoke** through `FMPProvider` to validate normalization on real
-   data (uses `FMP_API_KEY`).
-4. Engine refinement: drive the salvaged legacy `PortfolioTool` for share-level
-   accounting.
-
-Then the T1/T2 tracker cards land as thin strategies, overlays
-(`ehf/server/research/overlays/`: vol-target, regime gate, HRP) compose on top, and the §10
-conviction ideas get their `Screen` base.
+1. **Research batch job** (`jobs/research_batch.py`): a hypothesis backlog
+   (`theses` table) → walk-forward → gauntlet → scorecard markdown under
+   `var/scorecards/` → thesis marked promoted/killed → morning digest.
+2. **Overlays** (`overlays/`): vol-target, regime gate, HRP as Strategy → Strategy
+   wrappers, so every survivor can be risk-managed the same way.
+3. **Portfolio of survivors** + the Alpaca execution seam (`execution/`) for paper.
+4. One FMP client (fold the report's light client and the legacy compiler into a
+   single transport behind `FMPProvider`).

@@ -38,7 +38,7 @@ variable "schedule_enabled" {
 }
 
 variable "lambda_zip" {
-  description = "Path to the built Lambda package (produced by infra/build_lambda.sh)."
+  description = "Path to the built Lambda package (produced by infra/aws/build_lambda.sh)."
   type        = string
   default     = "../build/lambda.zip"
 }

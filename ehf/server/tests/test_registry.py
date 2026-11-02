@@ -85,3 +85,21 @@ def test_compare(registry: ExperimentRegistry) -> None:
     cmp = registry.compare([h1, h2])
     assert list(cmp.columns) == [h1, h2]
     assert "sharpe" in cmp.index
+
+
+def test_results_backend_override_forces_local_even_with_db_configured() -> None:
+    from ehf.server.research.results.config import result_store_from_env
+    from ehf.server.research.results.store import LocalResultStore
+
+    env = {
+        "EHF_DB_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:1:secret:x",
+        "EHF_RESULTS_BACKEND": "local",
+    }
+    assert isinstance(result_store_from_env(env), LocalResultStore)
+    assert isinstance(result_store_from_env({}), LocalResultStore)
+    import pytest
+
+    with pytest.raises(ValueError, match="EHF_RESULTS_BACKEND"):
+        result_store_from_env({"EHF_RESULTS_BACKEND": "sqlite"})
+    with pytest.raises(RuntimeError, match="no database"):
+        result_store_from_env({"EHF_RESULTS_BACKEND": "rds"})

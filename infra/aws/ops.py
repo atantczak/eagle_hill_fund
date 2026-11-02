@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Operational helpers for the daily report (boto3; reads .env for keys).
 
-    python infra/ops.py set-secrets                 # push FMP_API_KEY / ANTHROPIC_API_KEY into Secrets Manager
-    python infra/ops.py rotate-signer-key           # new access key for the link-signer user -> Secrets Manager
-    python infra/ops.py invoke [--dry-run] [--max-symbols N] [--no-narrative] [--date YYYY-MM-DD]
-    python infra/ops.py logs [--minutes 60]         # tail the Lambda log group
-    python infra/ops.py latest                      # print the latest report.md from S3
+    python infra/aws/ops.py set-secrets                 # push FMP_API_KEY / ANTHROPIC_API_KEY into Secrets Manager
+    python infra/aws/ops.py rotate-signer-key           # new access key for the link-signer user -> Secrets Manager
+    python infra/aws/ops.py invoke [--dry-run] [--max-symbols N] [--no-narrative] [--date YYYY-MM-DD]
+    python infra/aws/ops.py logs [--minutes 60]         # tail the Lambda log group
+    python infra/aws/ops.py latest                      # print the latest report.md from S3
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import boto3
 from botocore.config import Config
 from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT / ".env")
 
 REGION = os.getenv("AWS_REGION", "us-east-1")

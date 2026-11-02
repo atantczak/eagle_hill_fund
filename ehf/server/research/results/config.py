@@ -5,6 +5,12 @@ database connection is configured, and otherwise the local SQLite+parquet store.
 This is the single switch that makes RDS canonical: set the env, every
 ``ExperimentRegistry()`` writes to RDS+S3; unset it, behavior is exactly as before.
 
+``EHF_RESULTS_BACKEND`` is the explicit override: ``local`` forces SQLite+parquet
+even when a database is configured (what the Studio's research jobs set — a
+nightly sweep is thousands of writes and must never block on the network);
+``rds`` forces the cloud backend (and fails loudly if it isn't configured).
+Unset, the backend is inferred as described below.
+
 Connection sources, in priority order:
   1. ``EHF_DATABASE_URL`` (or ``DATABASE_URL``) — a full ``postgresql://`` DSN.
   2. ``EHF_DB_SECRET_ARN`` — an AWS Secrets Manager secret holding the RDS
@@ -57,8 +63,18 @@ def result_store_from_env(env: Env | None = None) -> ResultStore:
     if env is None:
         _ensure_dotenv()
         env = os.environ
+    backend = (env.get("EHF_RESULTS_BACKEND") or "").strip().lower()
+    if backend == "local":
+        return LocalResultStore()
+    if backend not in {"", "rds"}:
+        raise ValueError(f"EHF_RESULTS_BACKEND must be 'local' or 'rds', got {backend!r}")
     dsn = _resolve_dsn(env)
     if not dsn:
+        if backend == "rds":
+            raise RuntimeError(
+                "EHF_RESULTS_BACKEND=rds but no database is configured "
+                "(EHF_DATABASE_URL / EHF_DB_SECRET_ARN)"
+            )
         return LocalResultStore()  # unchanged local default
 
     bucket = env.get("EHF_RESULTS_S3_BUCKET")

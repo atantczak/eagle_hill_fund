@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pandas as pd
+
 from ehf.server.research.data.cache import BarCache
 from ehf.server.research.data.fmp_provider import FMPProvider
 
@@ -59,3 +61,16 @@ def test_intraday_parallel_empty_tasks(tmp_path) -> None:
 
     prov._compiler = _NoChunks()
     assert prov._fetch_intraday_parallel([], "2021-01-01", "2021-03-01", "1hour").empty
+
+
+def test_daily_chunks_cover_range_without_gaps_or_overlap() -> None:
+    from ehf.server.research.data.fmp_provider import daily_chunks
+
+    chunks = daily_chunks("2000-01-01", "2026-10-30", years=15)
+    assert chunks == [("2000-01-01", "2014-12-31"), ("2015-01-01", "2026-10-30")]
+    assert daily_chunks("2024-01-01", "2024-06-30") == [("2024-01-01", "2024-06-30")]
+    assert daily_chunks("2024-01-01", "2023-01-01") == []
+    three = daily_chunks("1990-03-15", "2026-10-30", years=15)
+    assert three[0] == ("1990-03-15", "2005-03-14") and three[-1][1] == "2026-10-30"
+    for a, b in zip(three, three[1:], strict=False):
+        assert pd.Timestamp(b[0]) == pd.Timestamp(a[1]) + pd.Timedelta(days=1)

@@ -8,10 +8,15 @@ run is analyzed without rerunning it.
              one-call ``robustness_report``
   regime     performance conditioned on market trend/volatility state
   tearsheet  one-call ``tearsheet`` / ``comparison_tearsheet`` figures
-
-Walk-forward efficiency plugs in here once the walk-forward harness lands.
+  gauntlet   fixed-in-advance kill criteria over a walk-forward result -> ``Verdict``
 """
 
+from ehf.server.research.analysis.gauntlet import (
+    GauntletConfig,
+    Verdict,
+    market_proxy_returns,
+    run_gauntlet,
+)
 from ehf.server.research.analysis.metrics import (
     deflated_sharpe_ratio,
     monte_carlo_paths,
@@ -29,6 +34,10 @@ from ehf.server.research.analysis.runs import (
 from ehf.server.research.analysis.tearsheet import comparison_tearsheet, tearsheet
 
 __all__ = [
+    "GauntletConfig",
+    "Verdict",
+    "run_gauntlet",
+    "market_proxy_returns",
     "sharpe_ratio",
     "probabilistic_sharpe_ratio",
     "deflated_sharpe_ratio",

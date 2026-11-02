@@ -17,10 +17,13 @@ ehf/
     integrations/  external services we wrap: financial (FMP), aws, ...
     tools/         shared utilities (parallelization, HTTP client, portfolio)
     tests/         unit + property tests (no network)
-    docs/          architecture, ADRs, design notes
+    docs/          architecture, ADRs, the research programme
     notebooks/     research playgrounds
     scripts/       benchmarks & one-off tools
-    var/           (git-ignored) generated runtime artifacts: price cache + results store
+    var/           (git-ignored) generated runtime artifacts: cache, results, universes, logs
+infra/
+  aws/             Terraform + build + ops for what runs in AWS (the daily report Lambda)
+  studio/          the Mac Studio as an always-on research server (launchd jobs, one table)
 ```
 
 ## Start here
@@ -33,7 +36,9 @@ the top-to-bottom map; everything else hangs off it.
 | Doc | What it covers |
 |-----|----------------|
 | [`docs/ARCHITECTURE.md`](ehf/server/docs/ARCHITECTURE.md) | The full walkthrough — read this first |
-| [`docs/COMPLEXITY.md`](ehf/server/docs/COMPLEXITY.md) | Complexity measures & the acceptance gauntlet |
+| [`docs/RESEARCH_PROGRAM.md`](ehf/server/docs/RESEARCH_PROGRAM.md) | **The standing research programme**: agenda, kill criteria, nightly loop, conventions |
+| [`docs/COMPLEXITY.md`](ehf/server/docs/COMPLEXITY.md) | Complexity measures & their acceptance gauntlet |
+| [`infra/README.md`](infra/README.md) | Where things run: AWS (daily report) and the Studio (research jobs) |
 | [`docs/REPO_AUDIT.md`](ehf/server/docs/REPO_AUDIT.md) | Original audit of the legacy code (point-in-time) |
 | [`docs/adr/`](ehf/server/docs/adr) | Architecture Decision Records (package layout, results storage, engine build-vs-buy) |
 

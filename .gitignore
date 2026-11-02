@@ -15,7 +15,9 @@ ehf/server/var/
 .mypy_cache/
 .ruff_cache/
 
-# Lambda build artifacts + terraform local files
-infra/build/
-infra/terraform/.terraform/
-infra/terraform/*.tfstate*
+# infra: Lambda build artifacts, terraform local files, rendered launchd plists
+infra/aws/build/
+infra/aws/terraform/.terraform/
+infra/aws/terraform/*.tfstate*
+infra/aws/terraform/*tfplan*
+infra/studio/launchd/

@@ -2,13 +2,13 @@
 # Build the Lambda deployment zip WITHOUT Docker: pure-Python package + manylinux
 # aarch64 wheels downloaded by pip for the Lambda runtime (python3.11, arm64).
 #
-#   infra/build_lambda.sh            -> infra/build/lambda.zip
+#   infra/aws/build_lambda.sh        -> infra/aws/build/lambda.zip
 #
 # Only the modules the job imports are shipped (reporting, signals, complexity).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD="${ROOT:?}/infra/build"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+BUILD="${ROOT:?}/infra/aws/build"
 STAGE="${BUILD:?}/lambda"
 ZIP="${BUILD:?}/lambda.zip"
 PY="${PYTHON:-${ROOT:?}/.venv311/bin/python}"
