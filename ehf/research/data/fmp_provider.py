@@ -11,10 +11,11 @@ Normalization is split out as a module-level pure function
 
 from __future__ import annotations
 
+import os
 import random
 import warnings
 from collections.abc import Sequence
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -146,6 +147,83 @@ class FMPProvider(DataProvider):
         _warn_if_truncated(combined, lo, hi, tf)
         return validate_bars(combined)
 
+    def quote(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        """Live quotes keyed by symbol: ``price``, ``change_pct``, ``time`` (ISO, UTC).
+
+        FMP's quote is a few seconds behind the tape (measured: 1-10 s), far
+        fresher than the end-of-day history the bars come from. One batch
+        request; a vendor failure or an unknown symbol just means no entry.
+        """
+        import requests
+
+        key = os.getenv("FMP_API_KEY")
+        if not key or not symbols:
+            return {}
+        r = requests.get(
+            "https://financialmodelingprep.com/stable/batch-quote",
+            params={"symbols": ",".join(s.upper() for s in symbols), "apikey": key},
+            timeout=10,
+        )
+        r.raise_for_status()
+        out: dict[str, dict[str, Any]] = {}
+        for row in r.json() if isinstance(r.json(), list) else []:
+            sym, price, ts = row.get("symbol"), row.get("price"), row.get("timestamp")
+            if not sym or price is None:
+                continue
+            pct = row.get("changePercentage")
+            out[str(sym).upper()] = {
+                "price": float(price),
+                "change_pct": float(pct) / 100.0 if pct is not None else None,
+                "time": datetime.fromtimestamp(int(ts), UTC).isoformat() if ts else None,
+            }
+        return out
+
+    def intraday(self, symbol: str, *, interval: str = "1min", days: int = 7) -> pd.DataFrame:
+        """Recent intraday bars for one symbol, straight from FMP, never cached.
+
+        Regular session only (FMP returns 09:30-15:59 ET), the last couple of
+        sessions. Canonical columns, UTC timestamps; empty when unknown. The
+        latest bar is about a minute behind the tape.
+        """
+        import requests
+
+        key = os.getenv("FMP_API_KEY")
+        if not key:
+            return pd.DataFrame(
+                columns=["symbol", "timestamp", "open", "high", "low", "close", "volume"]
+            )
+        end_d = date.today()
+        r = requests.get(
+            f"https://financialmodelingprep.com/stable/historical-chart/{interval}",
+            params={
+                "symbol": symbol.upper(),
+                "from": (end_d - timedelta(days=days)).isoformat(),
+                "to": end_d.isoformat(),
+                "apikey": key,
+            },
+            timeout=15,
+        )
+        r.raise_for_status()
+        rows = r.json() if isinstance(r.json(), list) else []
+        if not rows:
+            return pd.DataFrame(
+                columns=["symbol", "timestamp", "open", "high", "low", "close", "volume"]
+            )
+        df = pd.DataFrame(rows)
+        ts = pd.to_datetime(df["date"]).dt.tz_localize("America/New_York").dt.tz_convert("UTC")
+        out = pd.DataFrame(
+            {
+                "symbol": symbol.upper(),
+                "timestamp": ts,
+                "open": df["open"].astype(float),
+                "high": df["high"].astype(float),
+                "low": df["low"].astype(float),
+                "close": df["close"].astype(float),
+                "volume": df["volume"].astype(float),
+            }
+        )
+        return out.sort_values("timestamp").reset_index(drop=True)
+
     def refresh_tail(
         self,
         symbols: list[str],
@@ -162,16 +240,31 @@ class FMPProvider(DataProvider):
         does the dial say today": this pulls the tail regardless, so a page read
         after the close sees that close (and, during the session, the partial
         bar). Returns the fetched rows; a vendor failure propagates.
+
+        The pull always starts at or before the last cached bar. Coverage is
+        judged by the cache's min and max, so a ten-day tail stitched onto a cache
+        that stopped months ago would hide the hole for good; pulling from the
+        cache's end forward closes it instead.
         """
         tf = Timeframe(timeframe) if not isinstance(timeframe, Timeframe) else timeframe
         end_d = date.fromisoformat(str(end)) if end else date.today()
-        start_s = (end_d - timedelta(days=days)).isoformat()
-        fetched = self._fetch(
-            [s.upper() for s in symbols], start_s, end_d.isoformat(), tf, adjusted
-        )
-        if not fetched.empty:
-            self.cache.write(fetched, tf, adjusted)
-        return fetched
+        tail_start = end_d - timedelta(days=days)
+        by_start: dict[date, list[str]] = {}
+        for sym in (s.upper() for s in symbols):
+            covered = self.cache.covered_range(sym, tf, adjusted)
+            start_d = tail_start
+            if covered is not None:
+                start_d = min(start_d, covered[1].date() - timedelta(days=1))
+            by_start.setdefault(start_d, []).append(sym)
+        frames = []
+        for start_d, syms in by_start.items():
+            fetched = self._fetch(syms, start_d.isoformat(), end_d.isoformat(), tf, adjusted)
+            if not fetched.empty:
+                self.cache.write(fetched, tf, adjusted)
+                frames.append(fetched)
+        if not frames:
+            return normalize_fmp_records(pd.DataFrame(), timeframe=tf, adjusted=adjusted)
+        return pd.concat(frames, ignore_index=True)
 
     def _fetch(
         self, symbols: list[str], start: str, end: str, tf: Timeframe, adjusted: bool

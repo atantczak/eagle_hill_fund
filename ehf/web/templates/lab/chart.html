@@ -9,11 +9,13 @@
     <button class="btn sm primary" type="submit">Go</button>
   </form>
   <div class="tabs" id="sym-range">
+    <button type="button" data-mode="today" title="The latest session, minute by minute">Today</button>
     <button type="button" data-years="1">1Y</button><button type="button" data-years="3">3Y</button>
     <button type="button" data-years="5" aria-selected="true">5Y</button><button type="button" data-years="10">10Y</button>
     <button type="button" data-years="0">Max</button>
   </div>
   <span class="spacer"></span>
+  <button class="btn sm quiet" type="button" id="sym-refresh" title="Pull the latest bars and quote from the data vendor now">Refresh</button>
   <a class="btn sm quiet" id="sym-play" href="/lab/play?strategy=vix_vote&asset={{ symbol }}">Run a dial on {{ symbol }} →</a>
 </div>
 <div id="chart-root" data-symbol="{{ symbol }}" data-today="{{ today }}">

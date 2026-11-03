@@ -74,3 +74,51 @@ def test_daily_chunks_cover_range_without_gaps_or_overlap() -> None:
     assert three[0] == ("1990-03-15", "2005-03-14") and three[-1][1] == "2026-10-30"
     for a, b in zip(three, three[1:], strict=False):
         assert pd.Timestamp(b[0]) == pd.Timestamp(a[1]) + pd.Timedelta(days=1)
+
+
+def _daily(symbol: str, start: str, end: str) -> pd.DataFrame:
+    from ehf.research.data.schema import Timeframe, validate_bars
+
+    idx = pd.bdate_range(start, end, tz="UTC") + pd.Timedelta(hours=5)
+    out = pd.DataFrame(
+        {
+            "symbol": symbol,
+            "timestamp": idx,
+            "open": 1.0,
+            "high": 1.0,
+            "low": 1.0,
+            "close": 1.0,
+            "volume": 1.0,
+        }
+    )
+    out.attrs["timeframe"] = Timeframe.DAY.value
+    out.attrs["adjusted"] = True
+    return validate_bars(out)
+
+
+def test_refresh_tail_pulls_from_the_end_of_the_cache_forward(tmp_path, monkeypatch) -> None:
+    """A tail stitched onto a stale cache would hide the hole; the pull must close it."""
+    from ehf.research.data.schema import Timeframe
+
+    prov = FMPProvider(cache=BarCache(vendor="t", cache_dir=tmp_path))
+    prov.cache.write(_daily("OLD", "2024-01-01", "2024-12-31"), Timeframe.DAY, True)
+    calls: list[tuple[list[str], str, str]] = []
+
+    def fake_fetch(symbols, start, end, tf, adjusted):  # type: ignore[no-untyped-def]
+        calls.append((list(symbols), start, end))
+        frames = [_daily(s, start, end) for s in symbols]
+        out = pd.concat(frames, ignore_index=True)
+        out.attrs.update(frames[0].attrs)
+        return out
+
+    monkeypatch.setattr(prov, "_fetch", fake_fetch)
+    out = prov.refresh_tail(["OLD", "NEW"], days=10, end="2026-11-03")
+    assert sorted(calls) == [
+        (["NEW"], "2026-10-24", "2026-11-03"),  # nothing cached: just the tail
+        (["OLD"], "2024-12-30", "2026-11-03"),  # cached through 2024: from there forward
+    ]
+    assert set(out["symbol"]) == {"OLD", "NEW"}
+    lo, hi = prov.cache.covered_range("OLD", Timeframe.DAY, True)
+    cached = prov.cache.read("OLD", Timeframe.DAY, True)
+    assert lo.year == 2024 and hi.date().isoformat() == "2026-11-03"
+    assert cached["timestamp"].dt.year.value_counts().get(2025, 0) > 250  # the hole is filled

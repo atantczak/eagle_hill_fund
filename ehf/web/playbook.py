@@ -20,7 +20,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any, cast
 
 import pandas as pd
@@ -177,6 +177,7 @@ class Playbook:
         self.asset = asset
         self._cache: tuple[float, dict[str, Any]] | None = None
         self._lock = threading.Lock()
+        self.refresh_min_s = 60.0  # a forced refresh still waits this long between pulls
 
     # -- data ----------------------------------------------------------------------------
 
@@ -203,11 +204,14 @@ class Playbook:
 
     # -- the payload -----------------------------------------------------------------------
 
-    def today(self, end: date | None = None) -> dict[str, Any]:
+    def today(self, end: date | None = None, *, refresh: bool = False) -> dict[str, Any]:
+        """The cached payload, rebuilt after ``ttl_s`` or on ``refresh`` (throttled)."""
         end = end or date.today()
         with self._lock:
-            if self._cache and time.time() - self._cache[0] < self.ttl_s:
-                return self._cache[1]
+            if self._cache:
+                age = time.time() - self._cache[0]
+                if age < (self.refresh_min_s if refresh else self.ttl_s):
+                    return self._cache[1]
         payload = self.build(end)
         with self._lock:
             self._cache = (time.time(), payload)
@@ -271,6 +275,8 @@ class Playbook:
         return {
             "as_of": times[-1],
             "generated": date.today().isoformat(),
+            "built_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "live": self._live(),
             "asset": self.asset,
             "combined": {"state": combined_state, "text": combined_text},
             "market": {
@@ -285,6 +291,17 @@ class Playbook:
             "rules": rules_out,
             "series": {"time": times[cut:], "close": _series(spy.iloc[cut:])},
         }
+
+    def _live(self) -> dict[str, Any]:
+        """Live quotes for the asset and the VIX, when the provider has them."""
+        q = getattr(self.provider, "quote", None)
+        if not callable(q):
+            return {}
+        try:
+            return dict(q([self.asset, VIX]))
+        except Exception as exc:
+            log.info("playbook: live quotes unavailable: %s", exc)
+            return {}
 
     def _reading(self, rule: Rule, spy: pd.Series, vix: pd.Series, vix3m: pd.Series) -> pd.Series:
         if rule.key == "vix_surprise":
@@ -327,9 +344,9 @@ class Playbook:
 
 def mount_playbook(app: FastAPI, page: Page, playbook: Playbook) -> None:
     @app.get("/playbook", response_class=HTMLResponse)
-    def playbook_page(request: Request) -> HTMLResponse:
+    def playbook_page(request: Request, refresh: bool = False) -> HTMLResponse:
         try:
-            today = playbook.today()
+            today = playbook.today(refresh=refresh)
             error = None
         except Exception as exc:
             log.exception("playbook failed")
@@ -337,8 +354,8 @@ def mount_playbook(app: FastAPI, page: Page, playbook: Playbook) -> None:
         return page(request, "playbook.html", today=today, error=error)
 
     @app.get("/playbook/api/today")
-    def playbook_api() -> JSONResponse:
-        return JSONResponse(playbook.today())
+    def playbook_api(refresh: bool = False) -> JSONResponse:
+        return JSONResponse(playbook.today(refresh=refresh))
 
 
 __all__ = ["Playbook", "Rule", "RULES", "combine", "dial_label", "mount_playbook", "switches"]

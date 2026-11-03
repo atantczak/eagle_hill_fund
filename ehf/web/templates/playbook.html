@@ -8,6 +8,11 @@
 <div class="notice err">The playbook could not be computed: {{ error }}</div>
 {% elif today %}
 {% set c = today.combined %}
+<div class="toolbar" style="margin:0 0 10px">
+  <span class="small muted" id="pb-fresh">Built {{ today.built_at }}.</span>
+  <span class="spacer"></span>
+  <a class="btn sm quiet" href="/playbook?refresh=1" title="Pull the latest bars and quotes from the data vendor now">Refresh</a>
+</div>
 <div class="dial-card">
   <div class="dial-main">
     <div class="l">The playbook, as of the {{ today.as_of }} close</div>
@@ -77,7 +82,7 @@
 {% endfor %}
 
 <div class="notice">
-  <b>How to use this.</b> Check it after the close (the data is as of the last session; it refreshes every 15 minutes during the day with the partial bar). Act on what it says, including the false alarms: the record above includes every one of them. It reads closing prices, so it cannot protect against an overnight gap, and most years it will trail the market by a few points. That is the premium on the insurance.
+  <b>How to use this.</b> Check it after the close. The rules read daily closes; during the session the page re-pulls the day's partial bar every 15 minutes (or now, with <b>Refresh</b>), and the vendor's end-of-day history runs a few minutes behind the tape, so an intraday reading is provisional until 4 pm ET. Act on what it says, including the false alarms: the record above includes every one of them. It reads closing prices, so it cannot protect against an overnight gap, and most years it will trail the market by a few points. That is the premium on the insurance.
 </div>
 {% endif %}
 {% endblock %}

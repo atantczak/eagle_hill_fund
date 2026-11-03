@@ -38,6 +38,25 @@ S3, read-only store snapshot, a bigger image) is a separate decision for when
 the local version has earned it. *(Done the same day: ADR-0009 — the container
 mirrors the Studio's ``var/`` from S3, read-only.)*
 
+### Freshness (added 2026-11-03)
+
+Bars are cache-first, and the provider counts a span as covered when the cache ends
+within four days of the requested end, so a chart could lag by up to three sessions.
+The chart page and the playbook therefore re-pull the last ten days per symbol at
+most every 15 minutes, or on demand through **Refresh** (`?refresh=1`, throttled to
+once a minute), and show a live quote with its timestamp. Measured against FMP:
+the quote is 1–10 s behind the tape, 1-minute bars about a minute, and the
+end-of-day row for the current day updates a few minutes behind, so an intraday
+reading is provisional until the 4 pm close. `refresh_tail` always pulls from the
+end of the cache forward, never a bare ten-day tail, so a stale cache cannot be
+left with an invisible hole.
+
+The chart page also has a **Today** tab: the latest regular session in one-minute
+candles with the VIX alongside, pulled straight from FMP (never the daily cache,
+which would count a partial day as covered), kept for 60 s, and re-pulled every
+minute by the browser while the market is open. Chart times are Eastern
+wall-clock read as UTC so the axis says 9:30 to 4:00 for every viewer.
+
 ## Consequences
 
 - ``ehf.web`` now has an optional dependency on ``ehf.research``; the import is

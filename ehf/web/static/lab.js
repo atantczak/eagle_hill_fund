@@ -105,6 +105,9 @@ window.EHF = (function () {
     new ResizeObserver(draw).observe(container);
     return { set(list) { items = list || []; draw(); }, draw, layer };
   }
+  // A unix time on a chart is Eastern wall-clock read as UTC (see the intraday payload), so
+  // formatting it in UTC gives the session clock; a date string is shown as is.
+  const clock = (time) => (typeof time === 'number' ? new Date(time * 1000).toLocaleTimeString('en-US', { timeZone: 'UTC', hour: 'numeric', minute: '2-digit' }) + ' ET' : String(time));
   function legend(chart, host, items, times) {
     const box = el('div', 'legend'); host.appendChild(box);
     const dt = el('span', 'dt'); box.appendChild(dt);
@@ -112,7 +115,7 @@ window.EHF = (function () {
     function show(param) {
       let hit = false;
       items.forEach((it, i) => { const d = param && param.seriesData ? param.seriesData.get(it.series) : null; if (d) hit = true; const v = d ? (d.value != null ? d.value : d.close) : it.last; vals[i].textContent = it.fmt(v); });
-      dt.textContent = hit && param.time ? String(param.time) : (times && times.length ? times[times.length - 1] : '');
+      dt.textContent = hit && param.time ? clock(param.time) : (times && times.length ? clock(times[times.length - 1]) : '');
     }
     chart.subscribeCrosshairMove(show); show(null);
     return box;
@@ -390,18 +393,91 @@ window.EHF = (function () {
   }
 
   // ---- any symbol ---------------------------------------------------------------
+  // --- freshness: when the data was pulled, and how far behind the tape it is ---------
+  const ET = 'America/New_York';
+  function etTime(iso) { if (!iso) return '–'; return new Date(iso).toLocaleTimeString('en-US', { timeZone: ET, hour: 'numeric', minute: '2-digit' }); }
+  function etDate(iso) { if (!iso) return ''; return new Date(iso).toLocaleDateString('en-US', { timeZone: ET, month: 'short', day: 'numeric' }); }
+  function marketOpen(now) {
+    // US cash session, Mon–Fri 9:30–16:00 ET (holidays are treated as open days; the
+    // only cost is a "provisional" label on a bar that is in fact final).
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: ET, weekday: 'short', hour: 'numeric', minute: 'numeric', hour12: false }).formatToParts(now);
+    const g = (k) => parts.find((x) => x.type === k).value;
+    const wd = g('weekday'), m = Number(g('hour')) * 60 + Number(g('minute'));
+    return !['Sat', 'Sun'].includes(wd) && m >= 9 * 60 + 30 && m < 16 * 60;
+  }
+  function freshness(live, lastBarDate, now = new Date(), intraday = false) {
+    const open = marketOpen(now);
+    const q = live && live.quote;
+    const bits = [];
+    if (q && q.time) bits.push(`live quote <b>${fmt.px(q.price)}</b> ${q.change_pct != null ? `<span class="${signCls(q.change_pct)}">${fmt.sign(q.change_pct, 2)}</span>` : ''} at ${etTime(q.time)} ET`);
+    if (!intraday && live && live.bars_pulled_at) bits.push(`bars pulled ${etTime(live.bars_pulled_at)} ET`);
+    let lag;
+    if (intraday) lag = open ? 'minute bars run about a minute behind the tape, the quote a few seconds' : 'the market is closed, so these bars are final';
+    else lag = open ? 'during the session the latest daily bar is provisional (vendor end-of-day history runs a few minutes behind; the quote a few seconds)' : `daily bars are final through ${esc(lastBarDate || '')}`;
+    return `${bits.join(' · ')}${bits.length ? ' · ' : ''}${lag}.`;
+  }
+
   function symbolPage(root) {
     const symbol = root.dataset.symbol, today = root.dataset.today;
     const q = new URLSearchParams(location.search);
     let years = Number(q.get('years') || 5);
+    let mode = q.get('range') === 'today' ? 'today' : 'daily';
+    let timer = null; // auto-refresh while the Today tab is up during the session
+    const refreshBtn = $('#sym-refresh');
+    if (refreshBtn) refreshBtn.addEventListener('click', () => (mode === 'today' ? loadToday(true) : load(true)));
     const rangeBtns = document.querySelectorAll('#sym-range button');
-    rangeBtns.forEach((b) => { b.setAttribute('aria-selected', String(Number(b.dataset.years) === years)); b.addEventListener('click', () => { years = Number(b.dataset.years); rangeBtns.forEach((x) => x.setAttribute('aria-selected', String(x === b))); q.set('years', String(years)); history.replaceState(null, '', '/lab/chart?' + q.toString()); load(); }); });
-    $('#sym-form').addEventListener('submit', (e) => { e.preventDefault(); const s = $('#sym-input').value.trim().toUpperCase(); if (s) location.href = `/lab/chart?symbol=${encodeURIComponent(s)}&years=${years}`; });
-    async function load() {
-      const start = years ? new Date(Date.parse(today) - years * 365.25 * 864e5).toISOString().slice(0, 10) : '2000-01-03';
-      root.innerHTML = `<h1 class="gradient">${esc(symbol)}</h1><div class="notice"><span class="spin"></span> &nbsp;Loading ${esc(symbol)} since ${start}.</div>`;
+    function select(b) { rangeBtns.forEach((x) => x.setAttribute('aria-selected', String(x === b))); }
+    rangeBtns.forEach((b) => {
+      b.setAttribute('aria-selected', String(b.dataset.mode ? mode === 'today' : mode === 'daily' && Number(b.dataset.years) === years));
+      b.addEventListener('click', () => {
+        select(b);
+        if (b.dataset.mode === 'today') { mode = 'today'; q.set('range', 'today'); history.replaceState(null, '', '/lab/chart?' + q.toString()); loadToday(); return; }
+        mode = 'daily'; years = Number(b.dataset.years); q.delete('range'); q.set('years', String(years)); history.replaceState(null, '', '/lab/chart?' + q.toString()); load();
+      });
+    });
+    $('#sym-form').addEventListener('submit', (e) => { e.preventDefault(); const s = $('#sym-input').value.trim().toUpperCase(); if (s) location.href = `/lab/chart?symbol=${encodeURIComponent(s)}&years=${years}${mode === 'today' ? '&range=today' : ''}`; });
+    function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
+    async function loadToday(refresh = false) {
+      stopTimer();
+      root.innerHTML = `<h1 class="gradient">${esc(symbol)}</h1><div class="notice"><span class="spin"></span> &nbsp;${refresh ? 'Pulling' : 'Loading'} today's minute bars for ${esc(symbol)}.</div>`;
+      if (refreshBtn) refreshBtn.disabled = true;
       let d;
-      try { d = await getJSON(`/lab/api/bars/${encodeURIComponent(symbol)}?start=${start}&end=${today}`); } catch (e) { root.innerHTML = `<h1>${esc(symbol)}</h1><div class="notice err">${esc(e.message)}</div>`; return; }
+      try { d = await getJSON(`/lab/api/intraday/${encodeURIComponent(symbol)}${refresh ? '?refresh=1' : ''}`); } catch (e) { root.innerHTML = `<h1>${esc(symbol)}</h1><div class="notice err">${esc(e.message)}</div>`; if (refreshBtn) refreshBtn.disabled = false; return; }
+      if (refreshBtn) refreshBtn.disabled = false;
+      if (mode !== 'today') return; // the user moved on while we were fetching
+      const t = theme(); const S = d.stats || {}; const open = marketOpen(new Date());
+      const sessionIsToday = d.session === today;
+      root.innerHTML = `<h1 class="gradient">${esc(symbol)}</h1>
+        <div class="kpis">
+          <div class="kpi"><div class="l">Last</div><div class="v">${fmt.px(S.last)}</div><div class="s">${esc(S.last_time ? S.last_time.slice(11, 16) : '')} ET${sessionIsToday ? '' : ' · ' + esc(d.session)}</div></div>
+          <div class="kpi"><div class="l">vs prior close</div><div class="v ${signCls(S.change)}">${fmt.sign(S.change, 2)}</div><div class="s">from ${fmt.px(d.prev_close)}</div></div>
+          <div class="kpi"><div class="l">Session range</div><div class="v" style="font-size:17px">${fmt.px(S.low)} – ${fmt.px(S.high)}</div><div class="s">opened ${fmt.px(S.open)}</div></div>
+          <div class="kpi"><div class="l">Volume</div><div class="v">${fmt.vol ? fmt.vol(S.volume) : Math.round(S.volume).toLocaleString()}</div><div class="s">${S.bars} one-minute bars</div></div>
+          ${d.vix.length ? `<div class="kpi"><div class="l">VIX now</div><div class="v">${fmt.num(d.vix[d.vix.length - 1].value, 2)}</div><div class="s">implied daily move ≈ ${fmt.num(d.vix[d.vix.length - 1].value / 16, 2)}%</div></div>` : ''}
+        </div>
+        <p class="small muted" id="sym-fresh">${freshness(d.live, d.session, new Date(), true)} ${open && sessionIsToday ? 'This view re-pulls itself every minute while the market is open.' : sessionIsToday ? 'The session is over; this is the full day.' : `Showing the last session, ${esc(d.session)}; the market is closed.`}</p>
+        <div class="chart-card"><div class="chart-head" id="sym-head"><h3>${esc(symbol)}, ${esc(d.session)}, one-minute bars</h3></div><div class="chart xtall" id="sym-chart"></div></div>
+        <p class="small muted">Regular session only (9:30 to 4:00 ET). Each candle is one minute, about a minute behind the tape; the dashed line is the prior close. ${d.vix.length ? 'The lower pane is the VIX over the same minutes.' : ''}</p>`;
+      const host = $('#sym-chart'), head = $('#sym-head');
+      const chart = makeChart(host);
+      chart.applyOptions({ timeScale: { timeVisible: true, secondsVisible: false, rightOffset: 5 } });
+      const cs = addCandles(chart, d.candles); addVolume(chart, d.candles);
+      if (d.prev_close != null) cs.createPriceLine({ price: d.prev_close, color: t.grey, lineWidth: 1, lineStyle: LW().LineStyle.Dashed, axisLabelVisible: true, title: 'prior close' });
+      const items = [{ series: cs, label: 'close', color: t.grey, fmt: fmt.px, last: S.last }];
+      if (d.vix.length) { const v = addLine(chart, d.vix, { color: t.yellow, width: 1.5, pane: 1, format: (x) => x.toFixed(2), minMove: 0.01 }); items.push({ series: v, label: 'VIX', color: t.yellow, fmt: (x) => fmt.num(x, 2), last: last(d.vix.map((x) => x.value)) }); stretch(chart, [3, 1]); }
+      legend(chart, head, items, d.candles.map((c) => c.time));
+      chart.timeScale().fitContent();
+      if (open && sessionIsToday) timer = setInterval(() => { if (document.visibilityState === 'visible' && mode === 'today') loadToday(); }, 60000);
+    }
+    async function load(refresh = false) {
+      stopTimer();
+      const start = years ? new Date(Date.parse(today) - years * 365.25 * 864e5).toISOString().slice(0, 10) : '2000-01-03';
+      root.innerHTML = `<h1 class="gradient">${esc(symbol)}</h1><div class="notice"><span class="spin"></span> &nbsp;${refresh ? 'Pulling the latest bars for' : 'Loading'} ${esc(symbol)} since ${start}.</div>`;
+      if (refreshBtn) refreshBtn.disabled = true;
+      let d;
+      try { d = await getJSON(`/lab/api/bars/${encodeURIComponent(symbol)}?start=${start}&end=${today}${refresh ? '&refresh=1' : ''}`); } catch (e) { root.innerHTML = `<h1>${esc(symbol)}</h1><div class="notice err">${esc(e.message)}</div>`; if (refreshBtn) refreshBtn.disabled = false; return; }
+      if (refreshBtn) refreshBtn.disabled = false;
+      if (mode !== 'daily') return;
       const t = theme(); const L = d.last || {};
       const timeIn = d.exposure.length ? d.exposure.reduce((a, x) => a + x.value, 0) / d.exposure.length : null;
       const cur = d.exposure.length ? d.exposure[d.exposure.length - 1].value : null;
@@ -413,6 +489,7 @@ window.EHF = (function () {
           ${d.vix.length ? `<div class="kpi"><div class="l">VIX</div><div class="v">${fmt.num(d.vix[d.vix.length - 1].value, 1)}</div><div class="s">implied daily move ≈ ${fmt.num(d.vix[d.vix.length - 1].value / 16, 2)}%</div></div>` : ''}
           ${cur != null ? `<div class="kpi"><div class="l">Fear-gauge dial today</div><div class="v ${cur >= 0.95 ? 'pos' : cur < 0.05 ? 'neg' : ''}">${Math.round(cur * 100)}% in</div><div class="s">${esc(d.dial)} · in the market ${fmt.pct(timeIn, 0)} of this span</div></div>` : ''}
         </div>
+        <p class="small muted" id="sym-fresh">${freshness(d.live, L.date)}</p>
         <div class="chart-card"><div class="chart-head" id="sym-head"><h3>${esc(symbol)}, daily</h3></div><div class="chart xtall" id="sym-chart"></div></div>
         <p class="small muted">Candles are adjusted daily bars. The orange and blue lines are the 50- and 200-day averages. ${d.vix.length ? 'The middle pane is the VIX; the bottom pane is how much of the money the <b>' + esc(d.dial) + '</b> dial would have kept in ' + esc(symbol) + ' on each day, with the out-of-market days shaded on the price.' : 'The VIX family was not available for this symbol, so no dial is drawn.'}</p>`;
       const host = $('#sym-chart'), head = $('#sym-head');
@@ -437,11 +514,13 @@ window.EHF = (function () {
       lb.addEventListener('click', () => { const on = lb.getAttribute('aria-pressed') !== 'true'; lb.setAttribute('aria-pressed', String(on)); chart.priceScale('right').applyOptions({ mode: on ? LW().PriceScaleMode.Logarithmic : LW().PriceScaleMode.Normal }); });
       chart.timeScale().fitContent();
     }
-    load();
+    if (mode === 'today') loadToday(); else load();
   }
 
   // ---- the playbook: one chart per rule ---------------------------------------
   function playbookPage(p) {
+    const fresh = $('#pb-fresh');
+    if (fresh) { const lq = p.live && p.live[p.asset]; fresh.innerHTML = freshness({ quote: lq, bars_pulled_at: p.built_at }, p.as_of); }
     const t = theme(); const times = p.series.time;
     const price = times.map((d, i) => ({ time: d, value: p.series.close[i] })).filter((x) => x.value != null);
     const charts = [];
@@ -469,5 +548,5 @@ window.EHF = (function () {
     charts.forEach((a) => a.timeScale().subscribeVisibleLogicalRangeChange((rg) => { if (rg) charts.forEach((b) => { if (b !== a) b.timeScale().setVisibleLogicalRange(rg); }); }));
   }
 
-  return { runPage, browser, playground, symbolPage, runView, playbookPage, fmt };
+  return { runPage, browser, playground, symbolPage, runView, playbookPage, freshness, fmt };
 })();
