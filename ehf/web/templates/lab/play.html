@@ -42,5 +42,5 @@
 {% block scripts %}
 <script src="https://unpkg.com/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js"></script>
 <script src="/static/lab.js"></script>
-<script>EHF.playground(document.getElementById('play-root'), {{ catalog|tojson }}, {{ presets|tojson }});</script>
+<script>EHF.playground(document.getElementById('play-root'), {{ catalog|tojson }}, {{ presets|tojson }}, {{ pairs|tojson }});</script>
 {% endblock %}

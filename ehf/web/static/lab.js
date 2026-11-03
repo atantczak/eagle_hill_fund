@@ -25,7 +25,7 @@ window.EHF = (function () {
     date: (s) => s || '',
   };
   const signCls = (v) => (!fin(v) ? '' : v >= 0 ? 'pos' : 'neg');
-  const HIDDEN = new Set(['vix', 'vix3m', 'vvix', 'skew', 'cash']);
+  const HIDDEN = new Set(['vix', 'vix3m', 'vvix', 'skew', 'cash', 'base', 'benchmark']);
   const scalar = (v) => v == null || typeof v !== 'object';
   const paramChips = (params) => Object.entries(params || {}).filter(([k, v]) => !HIDDEN.has(k) && scalar(v)).map(([k, v]) => `<span class="chip">${esc(k)}=<b>${esc(v)}</b></span>`).join('');
   const paramsShort = (params) => Object.entries(params || {}).filter(([k, v]) => !HIDDEN.has(k) && k !== 'asset' && scalar(v)).map(([k, v]) => `${k}=${v}`).join(' ');
@@ -218,7 +218,8 @@ window.EHF = (function () {
   function playUrl(p) {
     const q = new URLSearchParams({ strategy: p.strategy, start: p.start, end: p.end, slippage_bps: (p.costs && p.costs.slippage_bps) || 1, fill_model: p.fill_model || 'next_open' });
     const syms = ((p.universe && p.universe.symbols) || []).filter((s) => !s.startsWith('^') && s !== 'CASH');
-    if (p.params && p.params.asset) q.set('asset', p.params.asset); else if (syms.length) q.set('symbols', syms.join(','));
+    if (p.params && p.params.base && p.params.asset) { const lev = String(p.params.asset); const ext = lev.endsWith('.X'); q.set('pair', `${p.params.base}/${ext ? lev.slice(0, -2) : lev}`); q.set('extended', String(ext)); }
+    else if (p.params && p.params.asset) q.set('asset', p.params.asset); else if (syms.length) q.set('symbols', syms.join(','));
     for (const [k, v] of Object.entries(p.params || {})) if (!HIDDEN.has(k) && k !== 'asset') q.set('p.' + k, String(v));
     return '/lab/play?' + q.toString();
   }
@@ -238,9 +239,21 @@ window.EHF = (function () {
         ${study && study.full_hash && study.full_hash !== hash ? `<a class="btn sm quiet" href="/lab/run/${esc(study.full_hash)}">Full-sample run with default settings</a>` : ''}
         <a class="btn sm quiet" href="/lab/chart?symbol=${encodeURIComponent(p.asset)}">${esc(p.asset)} chart</a>
       </div>
-      ${study ? `<p class="small muted">Walk-forward: ${study.n_windows} out-of-sample windows, ${study.train_months} months of training for ${study.test_months} months of trading, picking the ${esc(study.objective)}-best settings each time. Shaded stripes mark alternate windows.</p>` : ''}
+      ${study ? `<p class="small muted">Walk-forward: ${study.n_windows} out-of-sample windows, ${study.train_months} months of training for ${study.test_months} months of trading, picking the ${esc(study.objective)}-best settings each time. Shaded stripes mark alternate windows.${study.study ? ` Part of the <b>${esc(study.study)}</b> study${study.pair ? ` (${esc(study.pair)}${study.extended ? ', extended history' : ''})` : ''}.` : ''}</p>` : ''}
+      ${writeupCards(p.writeups)}
       <div id="run-view"></div>`;
     runView($('#run-view', root), p);
+  }
+
+  // The write-up(s) a run belongs to (ADR-0011): named directly, or about the run's study.
+  function writeupCards(list) {
+    if (!list || !list.length) return '';
+    const ico = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>';
+    return list.map((w) => {
+      const who = w.ideas && w.ideas.length ? ` Prompted by ${w.ideas.map((i) => `<a href="/ideas#${esc(i.id)}">${esc(i.title)}</a>${i.author ? ' (' + esc(i.author) + ')' : ''}`).join(', ')} in the ideas box.` : '';
+      const how = w.how === 'run' ? (w.label ? `This run is <b>${esc(w.label)}</b> in the write-up.` : 'This run is cited in the write-up.') : 'This run is part of the study the write-up reports on.';
+      return `<div class="writeup"><div class="ico">${ico}</div><div><div class="meta">Write-up · ${esc(w.date)}</div><h3><a href="/library/${esc(w.slug)}">${esc(w.title)}</a></h3><p>${esc(w.summary || '')}</p><p class="small muted">${how}${who} <a href="/library/${esc(w.slug)}">Read it →</a></p></div></div>`;
+    }).join('');
   }
 
   function browser() {
@@ -281,21 +294,27 @@ window.EHF = (function () {
   }
 
   // ---- playground ---------------------------------------------------------------
-  function playground(root, catalog, presets) {
+  function playground(root, catalog, presets, pairs) {
+    pairs = pairs || [];
     const byKey = Object.fromEntries(catalog.map((s) => [s.key, s]));
     const f = { strategy: $('#f-strategy'), doc: $('#f-doc'), uni: $('#f-universe'), start: $('#f-start'), end: $('#f-end'), slip: $('#f-slip'), fill: $('#f-fill'), params: $('#f-params'), run: $('#f-run'), reset: $('#f-reset'), auto: $('#f-auto'), log: $('#f-log'), hist: $('#f-history'), form: $('#play-form') };
     const main = $('#play-main');
     const results = new Map(); const order = []; let current = null, lastPayload = null, inflight = 0;
     const q = new URLSearchParams(location.search);
 
-    f.strategy.innerHTML = ['dial', 'portfolio'].map((kind) => `<optgroup label="${kind === 'dial' ? 'In or out of one asset (steered by the VIX family)' : 'Portfolio strategies (a basket of symbols)'}">${catalog.filter((s) => s.kind === kind).map((s) => `<option value="${s.key}">${s.key}</option>`).join('')}</optgroup>`).join('');
+    const KIND_LABEL = { dial: 'In or out of one asset (steered by the VIX family)', leverage: 'Leveraged fund when the market turns bullish, plain fund otherwise', portfolio: 'Portfolio strategies (a basket of symbols)' };
+    f.strategy.innerHTML = ['dial', 'leverage', 'portfolio'].map((kind) => `<optgroup label="${KIND_LABEL[kind]}">${catalog.filter((s) => s.kind === kind).map((s) => `<option value="${s.key}">${s.key}</option>`).join('')}</optgroup>`).join('');
     const initial = q.get('strategy') && byKey[q.get('strategy')] ? q.get('strategy') : (byKey.vix_vote ? 'vix_vote' : catalog[0].key);
     f.strategy.value = initial;
     if (q.get('start')) f.start.value = q.get('start'); if (q.get('end')) f.end.value = q.get('end');
     if (q.get('slippage_bps')) f.slip.value = q.get('slippage_bps'); if (q.get('fill_model')) f.fill.value = q.get('fill_model');
 
     function buildUniverse(s) {
-      if (s.kind === 'dial') {
+      if (s.kind === 'leverage') {
+        const cur = (q.get('pair') || 'QQQ/TQQQ').toUpperCase(); const ext = q.get('extended') !== 'false';
+        f.uni.innerHTML = `<div class="field"><label>Pair (plain fund / leveraged fund)</label><select id="f-pair">${pairs.map((p) => `<option value="${esc(p.key)}"${p.key === cur ? ' selected' : ''}>${esc(p.key)} — ${esc(p.name)}</option>`).join('')}</select></div><label class="check" style="margin:-6px 0 10px"><input type="checkbox" id="f-extended" ${ext ? 'checked' : ''}> Extended history (synthetic rebuild spliced before the fund existed)</label><div class="small muted" style="margin:-4px 0 12px">The rule reads the plain fund; the money sits in the leveraged fund when it says "bull", in the plain fund otherwise.</div>`;
+        $('#f-pair').addEventListener('change', schedule); $('#f-extended').addEventListener('change', schedule);
+      } else if (s.kind === 'dial') {
         f.uni.innerHTML = `<div class="field"><label>Asset (any ticker)</label><input type="text" id="f-asset" value="${esc(q.get('asset') || 'SPY')}" style="font-family:var(--mono);font-weight:600;text-transform:uppercase"></div><div class="small muted" style="margin:-6px 0 12px">Held against cash earning the T-bill rate. The VIX family rides along as the signal.</div>`;
       } else {
         const preset = presets.find((p) => p.name === 'etf_core') || presets[0];
@@ -336,12 +355,13 @@ window.EHF = (function () {
     function request() {
       const s = byKey[f.strategy.value];
       const body = { strategy: s.key, params: readParams(), start: f.start.value, end: f.end.value, slippage_bps: Number(f.slip.value), fill_model: f.fill.value, log: !!(f.log && f.log.checked) };
-      if (s.kind === 'dial') body.asset = ($('#f-asset').value || 'SPY').trim().toUpperCase(); else body.symbols = ($('#f-symbols').value || '').split(/[\s,]+/).filter(Boolean).map((x) => x.toUpperCase());
+      if (s.kind === 'leverage') { body.pair = $('#f-pair').value; body.extended = $('#f-extended').checked; }
+      else if (s.kind === 'dial') body.asset = ($('#f-asset').value || 'SPY').trim().toUpperCase(); else body.symbols = ($('#f-symbols').value || '').split(/[\s,]+/).filter(Boolean).map((x) => x.toUpperCase());
       return body;
     }
     function syncUrl(body) {
       const u = new URLSearchParams({ strategy: body.strategy, start: body.start, end: body.end, slippage_bps: String(body.slippage_bps), fill_model: body.fill_model });
-      if (body.asset) u.set('asset', body.asset); if (body.symbols) u.set('symbols', body.symbols.join(','));
+      if (body.asset) u.set('asset', body.asset); if (body.symbols) u.set('symbols', body.symbols.join(',')); if (body.pair) { u.set('pair', body.pair); u.set('extended', String(body.extended)); }
       for (const [k, v] of Object.entries(body.params)) u.set('p.' + k, String(v));
       history.replaceState(null, '', '/lab/play?' + u.toString());
     }
@@ -350,7 +370,7 @@ window.EHF = (function () {
       f.hist.innerHTML = '';
       for (const h of [...order].reverse()) {
         const p = results.get(h); const b = el('button'); b.type = 'button'; b.setAttribute('aria-current', String(h === current));
-        b.innerHTML = `<span>${esc(p.strategy)}${p.params.asset ? ' · ' + esc(p.params.asset) : ''}<br><span class="faint">${esc(paramsShort(p.params).slice(0, 48))}</span></span><span class="m">${fmt.num(p.metrics.sharpe)}<br><span class="${signCls(p.metrics.cagr)}">${fmt.pct(p.metrics.cagr)}</span></span>`;
+        b.innerHTML = `<span>${esc(p.strategy)}${p.params.asset ? ' · ' + esc(p.params.asset) : ''}${p.params.base ? '/' + esc(p.params.base) : ''}<br><span class="faint">${esc(paramsShort(p.params).slice(0, 48))}</span></span><span class="m">${fmt.num(p.metrics.sharpe)}<br><span class="${signCls(p.metrics.cagr)}">${fmt.pct(p.metrics.cagr)}</span></span>`;
         b.addEventListener('click', () => show(h, false));
         f.hist.appendChild(b);
       }
@@ -389,7 +409,7 @@ window.EHF = (function () {
     [f.start, f.end, f.slip, f.fill].forEach((i) => i.addEventListener('change', schedule));
     f.reset.addEventListener('click', () => { rebuild(null); schedule(); });
     f.form.addEventListener('submit', (e) => { e.preventDefault(); run(); });
-    if (q.has('strategy') || q.has('asset')) run();
+    if (q.has('strategy') || q.has('asset') || q.has('pair')) run();
   }
 
   // ---- any symbol ---------------------------------------------------------------

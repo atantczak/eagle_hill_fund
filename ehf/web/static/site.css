@@ -207,3 +207,14 @@ table.data td.num,table.data th.num{text-align:right;font-family:var(--mono);fon
 .ind-bar .ind-title{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
 .ind-bar .ind{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--soft)}
 .ind-bar .ind input{padding:4px 8px;font-size:12.5px;font-family:var(--mono);border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text)}
+
+/* ---- the thread: write-ups <-> runs <-> ideas (ADR-0011) ---- */
+.prompted{margin:-4px 0 14px}
+.grid.runs{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.run-card h3{margin:2px 0 6px;font-size:16px}
+.run-card .kpis{margin:6px 0 0}
+.writeup{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:start;background:var(--card);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:var(--radius);padding:14px 18px;margin:10px 0 14px;box-shadow:var(--shadow)}
+.writeup .ico{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent-ink)}
+.writeup h3{margin:0 0 2px;font-size:16px}.writeup p{margin:4px 0 0;color:var(--soft);font-size:14px;max-width:70ch}
+.writeup .meta{margin:0}
+@media (max-width:640px){.writeup{grid-template-columns:1fr}}

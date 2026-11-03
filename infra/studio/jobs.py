@@ -124,6 +124,16 @@ JOBS: tuple[Job, ...] = (
         ),
     ),
     Job(
+        name="leverage_study",
+        module="ehf.research.jobs.leverage_study",
+        args=("--end", "2099-12-31"),
+        schedule=({"Day": 1, "Hour": 4, "Minute": 30},),  # monthly, 1st, after the backfill
+        description=(
+            "Monthly leverage study: 3x fund when the market turns bullish vs the plain fund, "
+            "eight pairs, walk-forward + gauntlet + event study"
+        ),
+    ),
+    Job(
         name="sync_var",
         module="ehf.research.jobs.sync_var",
         schedule=({"Hour": 6, "Minute": 0},),  # after the refresh (2:00) and Sunday's study

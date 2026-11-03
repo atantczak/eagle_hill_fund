@@ -19,6 +19,7 @@ The §10 conviction ideas will use a separate lightweight ``Screen`` base.
 from ehf.research.strategies import (  # noqa: E402,F401  (import for side effect)
     bollinger,
     dial,
+    leverage,
     regime_gated,
     rise_fall,
     tsmom,

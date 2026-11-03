@@ -59,6 +59,10 @@ python infra/aws/site/ops.py password --email dad@example.com            # hand 
 python infra/aws/site/ops.py logs --minutes 30
 python infra/aws/site/ops.py ideas                                         # the ideas box, newest first
 python infra/aws/site/ops.py ideas --set 20261103-170102-ab12cd --status planned --note "After the QQQ study."
+# the thread (ADR-0011): a write-up names its study, its runs and the idea behind it
+python infra/aws/site/ops.py publish-report ... --study leverage --run 0123456789abcdef="the headline run" --idea 20261103-214217-9cd512
+python infra/aws/site/ops.py link --slug vix-backtest-results --study vix_overlay     # thread an older post
+python infra/aws/site/ops.py ideas --set 20261103-214217-9cd512 --status done --link /library/leverage-when-bullish
 ```
 
 Code change under `ehf/` -> merge to `main` -> the workflow deploys (about 3 minutes).
@@ -82,6 +86,14 @@ ADR-0009.
 python -m ehf.research.jobs.sync_var --dry-run     # what the next nightly sync would upload
 python -m ehf.research.jobs.sync_var               # push it now (e.g. after a study)
 ```
+
+## The thread: ideas, write-ups, runs
+
+A write-up's `meta.json` can name the `study` its scorecards carry, the `runs` its
+charts are built on and the `ideas` that prompted it. The post page then shows
+"The backtests behind this write-up" (with headline numbers when the lab is up) and
+"Prompted by"; each run page shows the write-up card; the Studies table links the
+write-up; an idea with a `link` shows "Read the result". ADR-0011.
 
 ## The playbook and the ideas box
 

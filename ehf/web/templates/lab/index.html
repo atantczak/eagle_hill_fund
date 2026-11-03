@@ -20,6 +20,7 @@
 <div class="table"><table class="data" id="studies">
 <thead><tr>
   <th class="sortable" data-k="strategy">Strategy</th>
+  <th class="sortable" data-k="study">Study</th>
   <th>Verdict</th>
   <th class="num sortable" data-k="sharpe">Sharpe</th>
   <th class="num sortable" data-k="cagr">CAGR</th>
@@ -36,11 +37,13 @@
 <tbody>
 {% for s in studies %}
 <tr class="link" data-href="/lab/run/{{ s.stitched_hash }}"
-    data-strategy="{{ s.strategy }}" data-sharpe="{{ s.metrics.get('sharpe') if s.metrics.get('sharpe') is not none else '' }}" data-cagr="{{ s.metrics.get('cagr') if s.metrics.get('cagr') is not none else '' }}"
+    data-strategy="{{ s.strategy }}" data-study="{{ s.study or '' }}{{ ' ' + s.pair if s.pair else '' }}" data-sharpe="{{ s.metrics.get('sharpe') if s.metrics.get('sharpe') is not none else '' }}" data-cagr="{{ s.metrics.get('cagr') if s.metrics.get('cagr') is not none else '' }}"
     data-max_drawdown="{{ s.metrics.get('max_drawdown') if s.metrics.get('max_drawdown') is not none else '' }}" data-sharpe_cost_x2="{{ s.metrics.get('sharpe_cost_x2') if s.metrics.get('sharpe_cost_x2') is not none else '' }}"
     data-time_in_market="{{ s.time_in_market if s.time_in_market is not none else '' }}" data-switches_per_year="{{ s.switches_per_year if s.switches_per_year is not none else '' }}"
     data-dd_2020="{{ s.dd_2020 if s.dd_2020 is not none else '' }}" data-dd_2022="{{ s.dd_2022 if s.dd_2022 is not none else '' }}">
   <td><b>{{ s.strategy }}</b><div class="faint small mono">{{ s.wf_id }}</div></td>
+  <td>{% if s.study %}<span class="mono small">{{ s.study }}</span>{% if s.pair %}<div class="small mono">{{ s.pair }}{% if s.extended %} <span class="faint">ext</span>{% endif %}</div>{% endif %}
+      {% for w in study_writeups.get(s.study, []) %}<div class="small"><a href="/library/{{ w.slug }}" onclick="event.stopPropagation()" title="{{ w.title }}">{{ w.title|truncate(28, True, '…') }} →</a></div>{% endfor %}{% else %}<span class="faint">—</span>{% endif %}</td>
   <td>{% if s.verdict == 'pass' %}<span class="pill pass">pass</span>{% elif s.verdict %}<span class="pill fail">{{ s.verdict }}</span>{% else %}<span class="pill neutral">—</span>{% endif %}
       {% if s.failed %}<div class="faint small">{{ s.failed|join(', ') }}</div>{% endif %}</td>
   <td class="num">{{ '%.2f'|format(s.metrics.get('sharpe')) if s.metrics.get('sharpe') is not none else '–' }}</td>
@@ -56,7 +59,7 @@
   <td class="mono small">{{ s.start }} → {{ s.end }}</td>
 </tr>
 {% endfor %}
-{% if not studies %}<tr><td colspan="13" class="muted">No scorecards in var/scorecards yet.</td></tr>{% endif %}
+{% if not studies %}<tr><td colspan="14" class="muted">No scorecards in var/scorecards yet.</td></tr>{% endif %}
 </tbody></table></div>
 </section>
 

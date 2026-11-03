@@ -46,7 +46,10 @@ ehf/
     complexity/  ✅ measures (entropy/memory/information) + reference systems
     analysis/    ✅ robustness (PSR/DSR/PBO/Monte-Carlo) + regime + tearsheets + the gauntlet
                     + dial metrics (time in market, switches, crisis drawdowns) + scorecard writer
-    studies/     ✅ one research question = one module (strategies + grids + dataset -> scorecards)
+    studies/     ✅ one research question = one module (strategies + grids + dataset -> scorecards);
+                    vix_overlay, leverage (Dad's TQQQ-vs-QQQ question; data/leverage.py builds the
+                    pairs + a synthetic rebuild of the 3x fund back to 1999; analysis/events.py is
+                    the "how long to hold it" event study)
     overlays/    ⚪ vol-target / regime-gate / HRP wrappers (Strategy -> Strategy)
     execution/   ⚪ Alpaca paper/live behind one interface (seam only)
     reporting/   ✅ daily market report (screens + Claude narrative), deployed on Lambda
@@ -57,6 +60,7 @@ ehf/
                     deployed over a read-only S3 mirror of var/ (lab/mirror.py, ADR-0009)
     playbook.py  ✅ the vetted VIX rules read live: IN / HALF / OUT and why (ADR-0010)
     ideas.py     ✅ the ideas box: research + feature requests as JSON in the reports bucket
+                    (an idea -> its study -> its write-up -> its runs are one thread: ADR-0011)
   integrations/  Financial Modeling Prep client (the data source research/data wraps)
   tools/         legacy utilities the FMP client depends on (parallelization, HTTP client, portfolio)
   tests/         ✅ unit tests, mirror research/ and web/ (no network)

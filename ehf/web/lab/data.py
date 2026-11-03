@@ -7,7 +7,8 @@ from the trade ledger, candles of the primary asset with trade markers, yearly
 returns, and the walk-forward windows when the run is a stitched out-of-sample curve.
 
 The benchmark is deliberately not "the first symbol in the basket": a dial is
-judged against holding the asset it times, everything else against SPY.
+judged against holding the asset it times, a strategy that names a ``benchmark``
+(the leverage rules: the plain fund) against that, everything else against SPY.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ SESSION_TZ = "America/New_York"
 BENCHMARK = "SPY"  # buy-and-hold comparison for every portfolio strategy
 MAX_MARKERS = 4000
 _FULL_RUN_RE = re.compile(r"run `([0-9a-f]{16})`")
+_STUDY_RE = re.compile(r"Study `([a-z0-9_]+)`")  # older cards name the study only in their notes
 
 PRIMARY_METRICS = ("cagr", "sharpe", "max_drawdown", "calmar", "ann_vol", "total_return")
 
@@ -102,9 +104,16 @@ def held_weights(
     return deltas.groupby(segment).cumsum()
 
 
+def run_params(spec: dict[str, Any]) -> dict[str, Any]:
+    """A run's strategy parameters; a stitched walk-forward run keeps them under ``base_params``."""
+    params = spec.get("params") or {}
+    base = params.get("base_params")
+    return dict(base) if isinstance(base, dict) else dict(params)
+
+
 def primary_asset(spec: dict[str, Any]) -> str:
     """The symbol whose price the run is charted against (SPY for the dials)."""
-    params = spec.get("params") or {}
+    params = run_params(spec)
     if isinstance(params.get("asset"), str):
         return str(params["asset"]).upper()
     uni = spec.get("universe") or {}
@@ -113,10 +122,12 @@ def primary_asset(spec: dict[str, Any]) -> str:
 
 
 def benchmark_symbol(spec: dict[str, Any]) -> str:
-    """What buy-and-hold to draw against: the timed asset for a dial, else SPY."""
-    params = spec.get("params") or {}
-    if isinstance(params.get("asset"), str):
-        return str(params["asset"]).upper()
+    """What buy-and-hold to draw against: a declared ``benchmark`` (the plain fund for a
+    leverage rule), else the timed asset for a dial, else SPY."""
+    params = run_params(spec)
+    for key in ("benchmark", "asset"):
+        if isinstance(params.get(key), str):
+            return str(params[key]).upper()
     return BENCHMARK
 
 
@@ -138,8 +149,27 @@ class Scorecard:
 
     @property
     def full_hash(self) -> str | None:
+        facts = self.payload.get("facts") or {}
+        if isinstance(facts.get("full_hash"), str):
+            return str(facts["full_hash"])
         m = _FULL_RUN_RE.search(str(self.payload.get("notes", "")))
         return m.group(1) if m else None
+
+    @property
+    def study(self) -> str:
+        """The study key this card belongs to (``vix_overlay``, ``leverage``), or ''."""
+        key = self.payload.get("study")
+        if isinstance(key, str) and key:
+            return key
+        m = _STUDY_RE.search(str(self.payload.get("notes", "")))
+        return m.group(1) if m else ""
+
+    @property
+    def hashes(self) -> set[str]:
+        out = {self.stitched_hash}
+        if self.full_hash:
+            out.add(self.full_hash)
+        return {h for h in out if h}
 
     def summary(self) -> dict[str, Any]:
         m = self.payload.get("oos_metrics") or {}
@@ -148,9 +178,13 @@ class Scorecard:
         extra = self.payload.get("extra") or {}
         windows = self.payload.get("windows") or []
         base = self.payload.get("base_spec") or {}
+        facts = self.payload.get("facts") or {}
         return {
             "wf_id": self.wf_id,
             "strategy": self.strategy,
+            "study": self.study,
+            "pair": facts.get("pair"),
+            "extended": facts.get("extended"),
             "stitched_hash": self.stitched_hash,
             "full_hash": self.full_hash,
             "verdict": v.get("status"),
@@ -212,6 +246,41 @@ class LabData:
 
     def studies(self) -> list[dict[str, Any]]:
         return [s.summary() for s in self.scorecards()]
+
+    def study_keys(self) -> list[str]:
+        return sorted({s.study for s in self.scorecards() if s.study})
+
+    def runs_of_study(self, study: str) -> set[str]:
+        """Every run hash a study's scorecards point at (stitched and full-sample)."""
+        out: set[str] = set()
+        for s in self.scorecards():
+            if s.study == study:
+                out |= s.hashes
+        return out
+
+    def run_metrics(self, hashes: Iterable[str]) -> dict[str, dict[str, Any]]:
+        """Headline numbers for a few runs without touching their arrays (a post page's
+        "backtests behind this" strip)."""
+        wanted = [h for h in dict.fromkeys(hashes) if h]
+        if not wanted:
+            return {}
+        marks = ",".join("?" * len(wanted))
+        df = self.store.query(f"WHERE config_hash IN ({marks})", tuple(wanted))
+        out: dict[str, dict[str, Any]] = {}
+        for _, r in df.iterrows():
+            spec = (
+                json.loads(r["spec_json"]) if "spec_json" in df.columns and r["spec_json"] else {}
+            )
+            out[str(r["config_hash"])] = {
+                "hash": str(r["config_hash"]),
+                "strategy": r["strategy"],
+                "params": json.loads(r["params_json"]) if r.get("params_json") else {},
+                "start": r["data_start"],
+                "end": r["data_end"],
+                "asset": primary_asset(spec) if spec else None,
+                "metrics": {c[2:]: _clean(r[c]) for c in df.columns if c.startswith("m_")},
+            }
+        return out
 
     # -- runs ------------------------------------------------------------------------
 
@@ -297,7 +366,9 @@ class LabData:
     # -- prices ------------------------------------------------------------------------
 
     def asset_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame | None:
-        """Daily bars for one symbol (cache-first via the provider); None if unavailable."""
+        """Daily bars for one symbol (cache-first via the provider); None if unavailable.
+        An extended leveraged series (``TQQQ.X``) is rebuilt from its pair the way the
+        study built it, since no vendor carries it."""
         if self.provider is None:
             return None
         key = (symbol.upper(), str(start), str(end))
@@ -306,7 +377,13 @@ class LabData:
         if hit is not None:
             return hit
         try:
-            bars = self.provider.get_bars([symbol], start, end, Timeframe.DAY)
+            from ehf.research.data.leverage import is_extended, load_pair_bars, pair_by_symbol
+
+            pair = pair_by_symbol(symbol) if is_extended(symbol) else None
+            if pair is not None:
+                bars, _ = load_pair_bars(self.provider, pair, "1998-01-01", end)
+            else:
+                bars = self.provider.get_bars([symbol], start, end, Timeframe.DAY)
         except Exception:
             return None
         bars = bars.loc[bars["symbol"] == symbol.upper()].reset_index(drop=True)
