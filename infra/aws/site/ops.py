@@ -19,6 +19,7 @@ the site lists whatever is there (new posts show within a minute).
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import mimetypes
 import os
@@ -203,6 +204,25 @@ def add_user(args: argparse.Namespace) -> int:
     return 0
 
 
+def reset_password(args: argparse.Namespace) -> int:
+    """Give a user a temporary password by hand (eaglehillfund.com has no mailbox,
+    so Cognito's own reset email never arrives). They choose a new one on next sign-in."""
+    cog = boto3.client("cognito-idp", region_name=REGION)
+    pools = [p for p in cog.list_user_pools(MaxResults=20)["UserPools"] if p["Name"] == NAME]
+    if not pools:
+        print("user pool not found")
+        return 1
+    pw = getpass.getpass("temporary password (12+ chars, upper, lower, digit; not echoed): ")
+    if pw != getpass.getpass("again: "):
+        print("passwords differ")
+        return 1
+    cog.admin_set_user_password(
+        UserPoolId=pools[0]["Id"], Username=args.email, Password=pw, Permanent=False
+    )
+    print(f"{args.email}: sign in with that temporary password; Cognito will ask for a new one")
+    return 0
+
+
 def ideas(args: argparse.Namespace) -> int:
     sys.path.insert(0, str(ROOT))
     from ehf.web.ideas import STATUSES, IdeaBox
@@ -263,6 +283,8 @@ def main() -> int:
     us = sub.add_parser("user")
     us.add_argument("--email", required=True)
     us.add_argument("--name", required=True)
+    pw = sub.add_parser("password", help="hand a user a temporary password (no reset email here)")
+    pw.add_argument("--email", required=True)
     idp = sub.add_parser("ideas")
     idp.add_argument("--set", metavar="ID", help="update this idea instead of listing")
     idp.add_argument("--status", help="new | planned | building | done | declined")
@@ -276,6 +298,7 @@ def main() -> int:
         "status": status,
         "logs": lambda: logs(a),
         "user": lambda: add_user(a),
+        "password": lambda: reset_password(a),
         "ideas": lambda: ideas(a),
     }
     return int(commands[a.cmd]())
