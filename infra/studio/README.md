@@ -9,7 +9,7 @@ gauntlet. Benefit Cloud work on the same box is protected: every job runs under
 ## The job table
 
 `jobs.py` is the single source of truth. One `Job` per scheduled task: the module
-to run (`python -m ehf.server.research.jobs.<name>`), its arguments, and its
+to run (`python -m ehf.research.jobs.<name>`), its arguments, and its
 `StartCalendarInterval`. Everything else (venv path, working directory, logs,
 environment, niceness) is derived.
 
@@ -33,7 +33,7 @@ the morning digest.
 
 ## Adding a job
 
-1. Write the entrypoint under `ehf/server/research/jobs/` (parse args → lock →
+1. Write the entrypoint under `ehf/research/jobs/` (parse args → lock →
    logging → call a library function → `write_summary`). Logic lives in the
    library, never in the job.
 2. Add a `Job(...)` row to `JOBS` in `jobs.py`.
@@ -42,7 +42,7 @@ the morning digest.
 ## Where things land
 
 ```
-ehf/server/var/
+var/
   cache/fmp/<tf>/adj/<SYM>.parquet    price cache (BarCache)
   universe/<name>/<YYYY-MM-DD>.parquet point-in-time membership, one file per night
   results/                            SQLite registry + per-run parquet

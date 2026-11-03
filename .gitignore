@@ -8,8 +8,8 @@ __pycache__/
 *.egg-info/
 
 # EHF research platform local artifacts (never commit data or run results).
-# All generated runtime artifacts live under ehf/server/var/ (cache + results).
-ehf/server/var/
+# All generated runtime artifacts live under var/ (cache + results).
+var/
 *.parquet
 .pytest_cache/
 .mypy_cache/

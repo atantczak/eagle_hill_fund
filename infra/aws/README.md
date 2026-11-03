@@ -17,7 +17,7 @@ infra/aws/
 
 | Resource | Name | Purpose |
 |---|---|---|
-| Lambda (py3.11, arm64, 3 GB, 15 min) | `ehf-daily-report` | runs `ehf.server.research.reporting.lambda_handler` |
+| Lambda (py3.11, arm64, 3 GB, 15 min) | `ehf-daily-report` | runs `ehf.research.reporting.lambda_handler` |
 | EventBridge Scheduler | `ehf-daily-report` | `cron(30 6 ? * MON-FRI *)` America/New_York |
 | S3 bucket | `ehf-market-reports-<acct>` | `daily-report/YYYY/MM/DD/*` + `daily-report/latest/*` + the Lambda zips |
 | Secrets Manager | `ehf/fmp`, `ehf/anthropic`, `ehf/report-signer` | API keys and the signer's access key; values set by `ops.py`, never by Terraform |

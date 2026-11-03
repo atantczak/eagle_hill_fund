@@ -1,6 +1,6 @@
 # The report job. Python 3.11 on arm64 (Graviton: cheaper, and the build script
 # downloads aarch64 wheels). The package is a plain zip: pandas + numpy +
-# requests + anthropic + the ehf.server.research.reporting package. No pyarrow,
+# requests + anthropic + the ehf.research.reporting package. No pyarrow,
 # no Docker needed to build it.
 
 resource "aws_cloudwatch_log_group" "lambda" {
@@ -12,7 +12,7 @@ resource "aws_lambda_function" "report" {
   function_name = var.name
   description   = "Eagle Hill daily market report: screens -> S3 -> Claude narrative -> SES"
   role          = aws_iam_role.lambda.arn
-  handler       = "ehf.server.research.reporting.lambda_handler.handler"
+  handler       = "ehf.research.reporting.lambda_handler.handler"
   runtime       = "python3.11"
   architectures = ["arm64"]
   memory_size   = var.lambda_memory_mb

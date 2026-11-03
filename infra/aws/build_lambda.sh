@@ -27,12 +27,12 @@ echo "==> installing wheels for cp${PY_VERSION/./} / $PLATFORM"
   "pandas>=2.2,<3.1" "numpy>=1.26,<3" "python-dateutil>=2.8,<3" "requests>=2.31" "anthropic>=0.60" "reportlab>=4.2"
 
 echo "==> copying ehf package subset"
-for d in ehf ehf/server ehf/server/research; do
+for d in ehf ehf/research; do
   mkdir -p "${STAGE:?}/$d" && cp "$ROOT/$d/__init__.py" "${STAGE:?}/$d/__init__.py"
 done
-cp -R "$ROOT/ehf/server/research/reporting"  "${STAGE:?}/ehf/server/research/reporting"
-cp -R "$ROOT/ehf/server/research/signals"    "${STAGE:?}/ehf/server/research/signals"
-cp -R "$ROOT/ehf/server/research/complexity" "${STAGE:?}/ehf/server/research/complexity"
+cp -R "$ROOT/ehf/research/reporting"  "${STAGE:?}/ehf/research/reporting"
+cp -R "$ROOT/ehf/research/signals"    "${STAGE:?}/ehf/research/signals"
+cp -R "$ROOT/ehf/research/complexity" "${STAGE:?}/ehf/research/complexity"
 
 echo "==> pruning"
 # Keep *.dist-info: packages resolve versions/entry points through importlib.metadata at import.

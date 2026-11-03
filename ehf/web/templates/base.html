@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ org }}{% endblock %}</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%235eead4'/%3E%3C/svg%3E">
+<style>
+:root{--bg:#070b14;--card:rgba(17,25,43,.74);--border:rgba(148,163,184,.16);--text:#e6edf7;
+--muted:#8b9bb4;--soft:#c7d2e3;--accent:#5eead4;--accent2:#a5b4fc;--up:#34d399;--down:#fb7185;
+--warn:#fbbf24;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+font-size:15px;line-height:1.6;color:var(--text);background:var(--bg);
+background-image:radial-gradient(1100px 560px at 8% -12%,rgba(94,234,212,.16),transparent 60%),
+radial-gradient(900px 520px at 100% -5%,rgba(129,140,248,.2),transparent 55%),
+linear-gradient(180deg,#0b1222 0%,#070b14 55%);background-attachment:fixed;min-height:100vh}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 18px 60px}
+nav.top{display:flex;align-items:center;gap:18px;padding:18px 0;border-bottom:1px solid var(--border);margin-bottom:28px;flex-wrap:wrap}
+nav.top .brand{font-weight:800;letter-spacing:-.02em;color:#fff;font-size:17px}
+nav.top .brand .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--accent);margin-right:8px;vertical-align:1px}
+nav.top a.link{color:var(--soft);padding:4px 10px;border-radius:8px}
+nav.top a.link.active,nav.top a.link:hover{color:#fff;background:rgba(255,255,255,.06);text-decoration:none}
+nav.top .spacer{flex:1}
+nav.top .who{color:var(--muted);font-size:13px}
+.eyebrow{font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:var(--accent);font-weight:700}
+h1{font-size:34px;line-height:1.1;margin:8px 0 10px;font-weight:800;letter-spacing:-.025em;
+background:linear-gradient(90deg,#fff 0%,#c9d4ff 60%,#5eead4 110%);-webkit-background-clip:text;background-clip:text;color:transparent}
+h2{font-size:20px;margin:30px 0 12px;letter-spacing:-.01em}
+h3{font-size:16px;margin:22px 0 8px}
+p.lede{color:var(--soft);font-size:17px;max-width:62ch}
+.muted{color:var(--muted)}.small{font-size:13px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:18px 20px;margin:0 0 14px;backdrop-filter:blur(6px)}
+.card h3{margin:0 0 4px}.card h3 a{color:#fff}
+.meta{color:var(--muted);font-size:12.5px;font-family:var(--mono);margin-bottom:8px}
+.tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:999px;background:rgba(94,234,212,.1);color:var(--accent);margin-right:6px;font-family:var(--mono)}
+.btn{display:inline-block;padding:9px 16px;border-radius:10px;border:1px solid rgba(94,234,212,.45);background:rgba(94,234,212,.1);color:var(--accent);font-weight:600}
+.btn:hover{background:rgba(94,234,212,.18);text-decoration:none}
+.btn.quiet{border-color:var(--border);background:rgba(255,255,255,.04);color:var(--soft)}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 20px}
+.frame{width:100%;height:78vh;border:1px solid var(--border);border-radius:12px;background:#fff}
+.body{max-width:68ch}.body p{color:var(--soft)}.body table{border-collapse:collapse;font-size:13.5px}
+.body th,.body td{border-bottom:1px solid var(--border);padding:6px 10px;text-align:left}
+.body blockquote{border-left:3px solid var(--accent);margin:0;padding:4px 14px;color:var(--soft)}
+ul.plain{list-style:none;padding:0;margin:0}ul.plain li{padding:8px 0;border-bottom:1px solid var(--border)}
+footer{margin-top:50px;color:var(--muted);font-size:12.5px;border-top:1px solid var(--border);padding-top:14px}
+@media (max-width:640px){h1{font-size:28px}.frame{height:60vh}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="top">
+  <a class="brand" href="/"><span class="dot"></span>{{ org }}</a>
+  <a class="link{% if path.startswith('/library') %} active{% endif %}" href="/library">Library</a>
+  <a class="link{% if path.startswith('/daily') %} active{% endif %}" href="/daily">Daily report</a>
+  <span class="spacer"></span>
+  {% if user %}<span class="who">{{ user.display }}</span>{% endif %}<a class="link" href="/logout">Sign out</a>
+</nav>
+{% block content %}{% endblock %}
+<footer>{{ org }} &middot; private research library &middot; not investment advice</footer>
+</div>
+</body>
+</html>

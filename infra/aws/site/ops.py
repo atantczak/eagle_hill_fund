@@ -2,7 +2,7 @@
 """Operate the site: publish write-ups to the library, watch the service.
 
     python infra/aws/site/ops.py publish-report --slug vix-explainer --title "..." \
-        --date 2026-11-02 --summary "..." --file ehf/server/var/reports/VIX_SPY_Explainer.pdf \
+        --date 2026-11-02 --summary "..." --file var/reports/VIX_SPY_Explainer.pdf \
         [--file more.md] [--tags vix,spy] [--body-md notes.md] [--author "Andrew Antczak"]
     python infra/aws/site/ops.py list                      # what is in the library
     python infra/aws/site/ops.py unpublish --slug SLUG --yes

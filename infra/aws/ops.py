@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Operational helpers for the daily report (boto3; reads .env for keys).
 
-    python infra/aws/ops.py set-secrets                 # push FMP_API_KEY / ANTHROPIC_API_KEY into Secrets Manager
-    python infra/aws/ops.py rotate-signer-key           # new access key for the link-signer user -> Secrets Manager
-    python infra/aws/ops.py invoke [--dry-run] [--max-symbols N] [--no-narrative] [--date YYYY-MM-DD]
-    python infra/aws/ops.py logs [--minutes 60]         # tail the Lambda log group
-    python infra/aws/ops.py latest                      # print the latest report.md from S3
+python infra/aws/ops.py set-secrets          # push FMP/ANTHROPIC keys into Secrets Manager
+python infra/aws/ops.py rotate-signer-key    # new link-signer access key -> Secrets Manager
+python infra/aws/ops.py invoke [--dry-run] [--max-symbols N] [--no-narrative]
+                               [--date YYYY-MM-DD]
+python infra/aws/ops.py logs [--minutes 60]         # tail the Lambda log group
+python infra/aws/ops.py latest                      # print the latest report.md from S3
 """
 
 from __future__ import annotations
@@ -52,7 +53,10 @@ def rotate_signer_key() -> int:
     """
     iam = boto3.client("iam", region_name=REGION)
     sm = boto3.client("secretsmanager", region_name=REGION)
-    existing = sorted(iam.list_access_keys(UserName=SIGNER_USER)["AccessKeyMetadata"], key=lambda k: k["CreateDate"])
+    existing = sorted(
+        iam.list_access_keys(UserName=SIGNER_USER)["AccessKeyMetadata"],
+        key=lambda k: k["CreateDate"],
+    )
     if len(existing) >= 2:
         oldest = existing[0]["AccessKeyId"]
         iam.delete_access_key(UserName=SIGNER_USER, AccessKeyId=oldest)
@@ -60,9 +64,14 @@ def rotate_signer_key() -> int:
     key = iam.create_access_key(UserName=SIGNER_USER)["AccessKey"]
     sm.put_secret_value(
         SecretId=SIGNER_SECRET,
-        SecretString=json.dumps({"access_key_id": key["AccessKeyId"], "secret_access_key": key["SecretAccessKey"]}),
+        SecretString=json.dumps(
+            {"access_key_id": key["AccessKeyId"], "secret_access_key": key["SecretAccessKey"]}
+        ),
     )
-    print(f"set {SIGNER_SECRET} to new key {key['AccessKeyId'][:8]}... for {SIGNER_USER} (IAM propagation takes ~10s)")
+    print(
+        f"set {SIGNER_SECRET} to new key {key['AccessKeyId'][:8]}... for {SIGNER_USER} "
+        "(IAM propagation takes ~10s)"
+    )
     return 0
 
 
@@ -78,12 +87,21 @@ def invoke(args: argparse.Namespace) -> int:
         payload["date"] = args.date
     # The narrative call alone can take 90s: wait for the whole run and NEVER retry,
     # or a slow run gets invoked (and emailed) two or three times.
-    lam = boto3.client("lambda", region_name=REGION, config=Config(read_timeout=910, connect_timeout=10, retries={"max_attempts": 0}))
+    lam = boto3.client(
+        "lambda",
+        region_name=REGION,
+        config=Config(read_timeout=910, connect_timeout=10, retries={"max_attempts": 0}),
+    )
     print(f"invoking {FUNCTION} with {payload} ...")
     t0 = time.time()
-    resp = lam.invoke(FunctionName=FUNCTION, InvocationType="RequestResponse", Payload=json.dumps(payload))
+    resp = lam.invoke(
+        FunctionName=FUNCTION, InvocationType="RequestResponse", Payload=json.dumps(payload)
+    )
     body = resp["Payload"].read().decode()
-    print(f"status {resp['StatusCode']} in {time.time() - t0:.0f}s; FunctionError={resp.get('FunctionError')}")
+    print(
+        f"status {resp['StatusCode']} in {time.time() - t0:.0f}s; "
+        f"FunctionError={resp.get('FunctionError')}"
+    )
     try:
         print(json.dumps(json.loads(body), indent=1))
     except ValueError:
@@ -94,7 +112,11 @@ def invoke(args: argparse.Namespace) -> int:
 def logs(args: argparse.Namespace) -> int:
     cw = boto3.client("logs", region_name=REGION)
     start = int((time.time() - args.minutes * 60) * 1000)
-    kwargs: dict[str, object] = {"logGroupName": f"/aws/lambda/{FUNCTION}", "startTime": start, "interleaved": True}
+    kwargs: dict[str, object] = {
+        "logGroupName": f"/aws/lambda/{FUNCTION}",
+        "startTime": start,
+        "interleaved": True,
+    }
     while True:
         page = cw.filter_log_events(**kwargs)
         for e in page.get("events", []):
@@ -106,14 +128,17 @@ def logs(args: argparse.Namespace) -> int:
 
 def latest() -> int:
     s3 = boto3.client("s3", region_name=REGION)
-    bucket = os.getenv("EHF_REPORT_BUCKET") or f"ehf-market-reports-{boto3.client('sts').get_caller_identity()['Account']}"
+    account = boto3.client("sts").get_caller_identity()["Account"]
+    bucket = os.getenv("EHF_REPORT_BUCKET") or f"ehf-market-reports-{account}"
     obj = s3.get_object(Bucket=bucket, Key="daily-report/latest/report.md")
     sys.stdout.write(obj["Body"].read().decode())
     return 0
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("set-secrets")
     sub.add_parser("rotate-signer-key")

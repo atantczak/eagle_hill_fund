@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="eyebrow">Eagle Hill Fund</div>
+<h1>Systematic research, written down.</h1>
+<p class="lede">{% if user %}Welcome back, {{ user.display }}. {% endif %}The fund's research write-ups and the daily market report, in one private place. Everything here is a working document: real data, honest tests, plain English.</p>
+<div class="actions">
+  <a class="btn" href="/library">Open the library</a>
+  <a class="btn quiet" href="/daily">Today's report</a>
+</div>
+<p class="muted small">Access is by invitation. Signing out ends the session for this whole site.</p>
+{% endblock %}

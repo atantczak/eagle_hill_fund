@@ -8,7 +8,7 @@
     python infra/studio/jobs.py run <job>         # run one job now, in the foreground
 
 Every job is ``nice``d so Benefit Cloud work never feels it, logs to
-``ehf/server/var/log/<job>.launchd.log`` (launchd's stdout/stderr) and the job's
+``var/log/<job>.launchd.log`` (launchd's stdout/stderr) and the job's
 own rotating log, and runs from the repo root with the project venv. launchd
 re-fires a missed calendar slot when the machine wakes, so the Studio sleeping
 through a night costs one late run, not a lost one.
@@ -30,7 +30,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = ROOT / ".venv311" / "bin" / "python"
-VAR = ROOT / "ehf" / "server" / "var"
+VAR = ROOT / "var"
 LOG_DIR = VAR / "log"
 RUN_DIR = VAR / "run"
 RENDER_DIR = Path(__file__).resolve().parent / "launchd"
@@ -95,31 +95,33 @@ class Job:
 JOBS: tuple[Job, ...] = (
     Job(
         name="refresh_data",
-        module="ehf.server.research.jobs.refresh_data",
+        module="ehf.research.jobs.refresh_data",
         args=("--universes", "etf_core,us_liquid,sp500,vix_family", "--timeframes", "1day"),
         schedule=({"Hour": 2, "Minute": 0},),  # every night; weekend runs find nothing stale
         description="Snapshot universes + bring the daily price cache up to the last session",
     ),
     Job(
         name="backfill_data",
-        module="ehf.server.research.jobs.refresh_data",
+        module="ehf.research.jobs.refresh_data",
         args=("--universes", "etf_core,us_liquid,sp500", "--timeframes", "1day", "--backfill"),
         schedule=({"Day": 1, "Hour": 3, "Minute": 0},),  # 1st of the month
         description="Monthly full-history re-fetch so back-adjusted prices stay current",
     ),
     Job(
         name="refresh_hourly",
-        module="ehf.server.research.jobs.refresh_data",
+        module="ehf.research.jobs.refresh_data",
         args=("--universes", "etf_core", "--timeframes", "1hour", "--start", "2023-01-01"),
         schedule=({"Weekday": 6, "Hour": 3, "Minute": 0},),  # Saturdays
         description="Weekly hourly-bar top-up for the ETF set (intraday studies)",
     ),
     Job(
         name="vix_study",
-        module="ehf.server.research.jobs.vix_study",
+        module="ehf.research.jobs.vix_study",
         args=("--end", "2099-12-31"),  # through the last cached session
         schedule=({"Weekday": 0, "Hour": 4, "Minute": 0},),  # Sundays, after the nightly refresh
-        description="Weekly VIX overlay study: nine rules + vote vs hold / 200dma, walk-forward + gauntlet",
+        description=(
+            "Weekly VIX overlay study: nine rules + vote vs hold / 200dma, walk-forward + gauntlet"
+        ),
     ),
 )
 
@@ -224,7 +226,9 @@ def _fmt_interval(i: dict[str, int]) -> str:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
     for c in ("render", "install", "uninstall", "status"):
         sub.add_parser(c)
@@ -235,7 +239,9 @@ def main() -> int:
         for path in render():
             print(path)
         return 0
-    return {"install": install, "uninstall": uninstall, "status": status}[a.cmd]() if a.cmd != "run" else run(a.job)
+    if a.cmd == "run":
+        return run(a.job)
+    return {"install": install, "uninstall": uninstall, "status": status}[a.cmd]()
 
 
 if __name__ == "__main__":
