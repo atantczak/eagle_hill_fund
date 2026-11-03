@@ -9,6 +9,8 @@
     python infra/aws/site/ops.py status                    # ECS deployments + target health
     python infra/aws/site/ops.py logs [--minutes 30]       # tail the container log
     python infra/aws/site/ops.py user --email X --name Y   # invite someone (see terraform.tfvars)
+    python infra/aws/site/ops.py ideas                     # the ideas box (newest first)
+    python infra/aws/site/ops.py ideas --set ID --status planned --note "..."
 
 Files are stored under library/<slug>/ in the reports bucket next to a meta.json;
 the site lists whatever is there (new posts show within a minute).
@@ -201,6 +203,35 @@ def add_user(args: argparse.Namespace) -> int:
     return 0
 
 
+def ideas(args: argparse.Namespace) -> int:
+    sys.path.insert(0, str(ROOT))
+    from ehf.web.ideas import STATUSES, IdeaBox
+
+    box = IdeaBox(boto3.client("s3", region_name=REGION), bucket_name(), ttl_s=0)
+    if args.set:
+        if not args.status:
+            print(f"--status is required: {', '.join(STATUSES)}", file=sys.stderr)
+            return 2
+        idea = box.set_status(args.set, args.status, args.note)
+        print(f"{idea.id}: {idea.status}  {idea.title}")
+        return 0
+    rows = box.list()
+    if args.status:
+        rows = [i for i in rows if i.status == args.status]
+    if args.json:
+        print(json.dumps([i.__dict__ for i in rows], indent=1))
+        return 0
+    for i in rows:
+        print(f"{i.id}  [{i.status:8s}] {i.kind:8s} {i.author:18s} {i.title}")
+        if i.details:
+            for line in i.details.splitlines():
+                print(f"{'':24s}  {line}")
+        if i.note:
+            print(f"{'':24s}  -> {i.note}")
+    print(f"{len(rows)} idea(s)")
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -232,6 +263,11 @@ def main() -> int:
     us = sub.add_parser("user")
     us.add_argument("--email", required=True)
     us.add_argument("--name", required=True)
+    idp = sub.add_parser("ideas")
+    idp.add_argument("--set", metavar="ID", help="update this idea instead of listing")
+    idp.add_argument("--status", help="new | planned | building | done | declined")
+    idp.add_argument("--note", help="a sentence shown under the idea on the site")
+    idp.add_argument("--json", action="store_true")
     a = p.parse_args()
     commands = {
         "publish-report": lambda: publish(a),
@@ -240,6 +276,7 @@ def main() -> int:
         "status": status,
         "logs": lambda: logs(a),
         "user": lambda: add_user(a),
+        "ideas": lambda: ideas(a),
     }
     return int(commands[a.cmd]())
 

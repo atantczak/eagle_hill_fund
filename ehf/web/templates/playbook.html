@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Playbook · {{ org }}{% endblock %}
+{% block content %}
+<div class="eyebrow">Playbook</div>
+<h1 class="gradient">What the rules say today</h1>
+<p class="lede">The two VIX rules that earned a place in the study, read from the latest close. Same code, same settings, same data as the backtests. Not investment advice; a disciplined reason to be in or out, written down before the fact.</p>
+{% if error %}
+<div class="notice err">The playbook could not be computed: {{ error }}</div>
+{% elif today %}
+{% set c = today.combined %}
+<div class="dial-card">
+  <div class="dial-main">
+    <div class="l">The playbook, as of the {{ today.as_of }} close</div>
+    <div class="state {{ c.state|lower }}">{{ c.state }}</div>
+    <p>{{ c.text }}</p>
+  </div>
+  <div class="dial-side">
+    {% for r in today.rules %}
+    <div class="mini">
+      <div class="l">{{ r.number }}. {{ r.title }} <span class="muted">({{ r.role }})</span></div>
+      <div class="v"><span class="state sm {{ r.state|lower }}">{{ r.state }}</span>
+        <span class="mono small muted">{% if r.days_in_state %}{{ r.days_in_state }} session{{ '' if r.days_in_state == 1 else 's' }}, since {{ r.since }}{% endif %}</span></div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% set m = today.market %}
+<div class="kpis">
+  <div class="kpi"><div class="l">{{ today.asset }} close</div><div class="v">{{ '%.2f'|format(m.close) if m.close is not none else '–' }}</div><div class="s {{ 'pos' if m.change and m.change > 0 else 'neg' if m.change and m.change < 0 else '' }}">{% if m.change is not none %}{{ '%+.2f'|format(m.change * 100) }}% on the day{% endif %}</div></div>
+  <div class="kpi"><div class="l">VIX</div><div class="v">{{ '%.1f'|format(m.vix) if m.vix is not none else '–' }}</div><div class="s">implied daily move ≈ {{ '%.2f'|format(m.implied_move * 100) if m.implied_move else '–' }}%</div></div>
+  <div class="kpi"><div class="l">VIX3M</div><div class="v">{{ '%.1f'|format(m.vix3m) if m.vix3m is not none else '–' }}</div><div class="s">three-month fear</div></div>
+  <div class="kpi"><div class="l">{{ today.asset }} vs 200-day line</div><div class="v {{ 'pos' if m.vs_sma200 and m.vs_sma200 > 0 else 'neg' if m.vs_sma200 and m.vs_sma200 < 0 else '' }}">{{ '%+.1f'|format(m.vs_sma200 * 100) if m.vs_sma200 is not none else '–' }}%</div><div class="s">for the slow grinds (not part of the dial yet)</div></div>
+</div>
+
+{% for r in today.rules %}
+<section class="card rule" id="{{ r.key }}">
+  <div class="rule-head">
+    <div>
+      <div class="eyebrow">Rule {{ r.number }} · {{ r.role }}</div>
+      <h2>{{ r.title }} <span class="state sm {{ r.state|lower }}">{{ r.state }}</span></h2>
+    </div>
+    <div class="reading">
+      <div class="l">{{ r.reading_label }}</div>
+      <div class="v mono">{% if r.reading is not none %}{% if r.reading_fmt == 'pct' %}{{ '%.0f'|format(r.reading * 100) }}%{% else %}{{ '%.3f'|format(r.reading) }}{% endif %}{% else %}–{% endif %}</div>
+      <div class="s mono muted">in under {% if r.reading_fmt == 'pct' %}{{ '%.0f'|format(r.in_below * 100) }}%{% else %}{{ '%.2f'|format(r.in_below) }}{% endif %} · out over {% if r.reading_fmt == 'pct' %}{{ '%.0f'|format(r.out_above * 100) }}%{% else %}{{ '%.2f'|format(r.out_above) }}{% endif %}</div>
+    </div>
+  </div>
+  <p class="plain">{{ r.plain }}</p>
+  <div class="chart-card flat"><div class="chart-head" id="head-{{ r.key }}"><h3>{{ today.asset }} with the days this rule was out shaded, and the reading underneath</h3></div><div class="chart tall" id="chart-{{ r.key }}"></div></div>
+  <div class="two">
+    <div>
+      <h4>Recent switches</h4>
+      {% if r.switches %}
+      <div class="table"><table class="data"><thead><tr><th>Date</th><th>From</th><th>To</th></tr></thead><tbody>
+      {% for s in r.switches %}<tr><td class="mono">{{ s.date }}</td><td><span class="state xs {{ s.from|lower }}">{{ s.from }}</span></td><td><span class="state xs {{ s.to|lower }}">{{ s.to }}</span></td></tr>{% endfor %}
+      </tbody></table></div>
+      {% else %}<p class="muted small">No switches in the span loaded.</p>{% endif %}
+    </div>
+    <div>
+      <h4>What it did in the test</h4>
+      {% if r.study %}
+      {% set s = r.study %}
+      <p class="small">Walk-forward, {{ s.n_windows }} out-of-sample years, each tuned only on the {{ (s.train_months or 24) // 12 }} years before it.</p>
+      <div class="kpis tight">
+        <div class="kpi"><div class="l">Return / yr</div><div class="v">{{ '%.1f'|format(s.cagr * 100) if s.cagr is not none else '–' }}%</div></div>
+        <div class="kpi"><div class="l">Worst loss</div><div class="v neg">{{ '%.0f'|format(s.max_drawdown * 100) if s.max_drawdown is not none else '–' }}%</div></div>
+        <div class="kpi"><div class="l">Switches / yr</div><div class="v">{{ '%.0f'|format(s.switches_per_year) if s.switches_per_year is not none else '–' }}</div></div>
+        <div class="kpi"><div class="l">Time in market</div><div class="v">{{ '%.0f'|format(s.time_in_market * 100) if s.time_in_market is not none else '–' }}%</div></div>
+        <div class="kpi"><div class="l">Covid crash</div><div class="v neg">{{ '%.0f'|format(s.dd_2020 * 100) if s.dd_2020 is not none else '–' }}%</div></div>
+        <div class="kpi"><div class="l">April 2025</div><div class="v neg">{{ '%.0f'|format(s.dd_2025 * 100) if s.dd_2025 is not none else '–' }}%</div></div>
+      </div>
+      {% if lab %}<p class="small"><a href="/lab/run/{{ s.run }}">The full stitched run →</a> &nbsp; <a href="/library">The write-up →</a></p>{% endif %}
+      {% else %}<p class="muted small">No scorecard on file for this rule yet.</p>{% endif %}
+    </div>
+  </div>
+</section>
+{% endfor %}
+
+<div class="notice">
+  <b>How to use this.</b> Check it after the close (the data is as of the last session; it refreshes every 15 minutes during the day with the partial bar). Act on what it says, including the false alarms: the record above includes every one of them. It reads closing prices, so it cannot protect against an overnight gap, and most years it will trail the market by a few points. That is the premium on the insurance.
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+{% if today %}
+<script src="https://unpkg.com/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js"></script>
+<script src="/static/lab.js"></script>
+<script>EHF.playbookPage({{ today|tojson }});</script>
+{% endif %}
+{% endblock %}

@@ -139,6 +139,10 @@ small cells per hour, or 1,000–1,500 full-universe cells per hour.
 
 ## 7. Status log
 
+* **2026-11-03** — Playbook (`/playbook`, ADR-0010): the two rules the VIX write-up
+  recommended, read live from the latest close with the combined answer (IN / HALF / OUT),
+  readings, switches and the walk-forward record. Ideas box (`/ideas`) for research and
+  site requests from Wes, Dad and Andrew; triaged with `ops.py ideas`.
 * **2026-11-03** — The lab is on eaglehillfund.com (ADR-0009): the Studio syncs `var/`
   to S3 nightly (`sync_var`), the container mirrors it on demand into a scratch volume,
   read-only (playground runs are not logged from the site). Task 0.5 vCPU / 2 GiB.

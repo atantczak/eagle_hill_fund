@@ -19,10 +19,9 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.
 # ehf.web serves the site, ehf.research/integrations/tools run the lab.
 COPY ehf ehf
 
-# The only writable place at runtime (an ephemeral task volume is mounted here and
-# inherits this directory's owner); the root filesystem is read-only.
-RUN useradd --system --uid 10001 --no-create-home app \
-    && mkdir -p /var/ehf && chown app:app /var/ehf
+# The only writable place at runtime is the task volume mounted at /var/ehf (handed
+# to this user by the "init" container in ecs.tf); the root filesystem is read-only.
+RUN useradd --system --uid 10001 --no-create-home app && mkdir -p /var/ehf
 USER app
 
 EXPOSE 8080

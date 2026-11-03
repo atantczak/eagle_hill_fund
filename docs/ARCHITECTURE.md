@@ -55,6 +55,8 @@ ehf/
   web/           ✅ eaglehillfund.com: FastAPI + Jinja over the reports bucket, Cognito at the ALB
     lab/         ✅ backtest browser, playground, any-ticker charts (lightweight-charts; ADR-0008);
                     deployed over a read-only S3 mirror of var/ (lab/mirror.py, ADR-0009)
+    playbook.py  ✅ the vetted VIX rules read live: IN / HALF / OUT and why (ADR-0010)
+    ideas.py     ✅ the ideas box: research + feature requests as JSON in the reports bucket
   integrations/  Financial Modeling Prep client (the data source research/data wraps)
   tools/         legacy utilities the FMP client depends on (parallelization, HTTP client, portfolio)
   tests/         ✅ unit tests, mirror research/ and web/ (no network)

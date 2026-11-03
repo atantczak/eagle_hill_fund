@@ -18,11 +18,13 @@
   <a class="brand" href="/"><span class="dot"></span>{{ org }}</a>
   <a class="link{% if path.startswith('/library') %} active{% endif %}" href="/library">Library</a>
   <a class="link{% if path.startswith('/daily') %} active{% endif %}" href="/daily">Daily report</a>
+  {% if playbook %}<a class="link{% if path.startswith('/playbook') %} active{% endif %}" href="/playbook">Playbook</a>{% endif %}
   {% if lab %}
   <a class="link{% if path == '/lab' or path == '/lab/' or path.startswith('/lab/run') %} active{% endif %}" href="/lab">Backtests</a>
   <a class="link{% if path.startswith('/lab/play') %} active{% endif %}" href="/lab/play">Playground</a>
   <a class="link{% if path.startswith('/lab/chart') %} active{% endif %}" href="/lab/chart">Charts</a>
   {% endif %}
+  <a class="link{% if path.startswith('/ideas') %} active{% endif %}" href="/ideas">Ideas</a>
   <span class="spacer"></span>
   {% if user %}<span class="who">{{ user.display }}</span>{% endif %}
   <button class="icon-btn" id="theme-toggle" type="button" title="Toggle light / dark" aria-label="Toggle light or dark theme">
