@@ -31,6 +31,85 @@ log = logging.getLogger(__name__)
 
 SMA_WINDOWS = (50, 200)
 WARMUP_DAYS = 400
+MAX_LINES = 4  # per kind (SMA, EMA)
+MAX_WINDOW = 500
+
+
+def parse_windows(raw: str | None, *, default: tuple[int, ...] = ()) -> tuple[int, ...]:
+    """``"20, 50"`` -> (20, 50); empty means none, ``None`` means the default."""
+    if raw is None:
+        return default
+    out: list[int] = []
+    for part in raw.replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            n = int(part)
+        except ValueError:
+            raise ValueError(f"not a whole number of days: {part!r}") from None
+        if not 2 <= n <= MAX_WINDOW:
+            raise ValueError(f"a window must be between 2 and {MAX_WINDOW} days, not {n}")
+        if n not in out:
+            out.append(n)
+    if len(out) > MAX_LINES:
+        raise ValueError(f"at most {MAX_LINES} lines per indicator")
+    return tuple(out)
+
+
+def parse_indicators(
+    sma: str | None = None, ema: str | None = None, bb: str | None = None, rsi: str | None = None
+) -> dict[str, Any]:
+    """Validate the chart's indicator settings (query-string strings) into one dict.
+
+    ``sma``/``ema``: comma lists of windows; ``bb``: ``"window,n_std"``; ``rsi``: a
+    window. Anything absent falls back to the page's defaults (SMA 50 and 200,
+    nothing else).
+    """
+    out: dict[str, Any] = {
+        "sma": parse_windows(sma, default=SMA_WINDOWS),
+        "ema": parse_windows(ema),
+        "bb": None,
+        "rsi": None,
+    }
+    if bb:
+        parts = [x.strip() for x in bb.split(",")]
+        try:
+            window = int(parts[0])
+            n_std = float(parts[1]) if len(parts) > 1 and parts[1] else 2.0
+        except ValueError:
+            raise ValueError("Bollinger wants 'window,standard deviations', e.g. 20,2") from None
+        if not 2 <= window <= MAX_WINDOW or not 0.5 <= n_std <= 5.0:
+            raise ValueError("Bollinger window 2-500 days, width 0.5-5 standard deviations")
+        out["bb"] = {"window": window, "n_std": n_std}
+    if rsi:
+        (window,) = parse_windows(rsi) or (0,)
+        if window:
+            out["rsi"] = {"window": window}
+    return out
+
+
+def indicator_key(ind: dict[str, Any]) -> str:
+    bb, r = ind.get("bb"), ind.get("rsi")
+    return "|".join(
+        [
+            ",".join(map(str, ind.get("sma", ()))),
+            ",".join(map(str, ind.get("ema", ()))),
+            f"{bb['window']},{bb['n_std']:g}" if bb else "",
+            str(r["window"]) if r else "",
+        ]
+    )
+
+
+def max_window(ind: dict[str, Any]) -> int:
+    wins = [*ind.get("sma", ()), *ind.get("ema", ())]
+    if ind.get("bb"):
+        wins.append(int(ind["bb"]["window"]))
+    if ind.get("rsi"):
+        wins.append(int(ind["rsi"]["window"]))
+    return max(wins, default=0)
+
+
 TAIL_TTL_S = 900.0  # re-pull the last days of bars at most this often per symbol
 REFRESH_MIN_S = 60.0  # ...and no more often than this even when someone hits Refresh
 TAIL_DAYS = 10
@@ -63,7 +142,7 @@ class Charts:
         self.provider = provider
         self.tail_ttl_s = tail_ttl_s
         self.refresh_min_s = refresh_min_s
-        self._cache: OrderedDict[tuple[str, str, str], dict[str, Any]] = OrderedDict()
+        self._cache: OrderedDict[tuple[str, str, str, str], dict[str, Any]] = OrderedDict()
         self._tail: dict[str, float] = {}  # symbol -> when its tail was last pulled
         self._intra: dict[str, tuple[float, dict[str, Any]]] = {}
         self._lock = threading.Lock()
@@ -123,14 +202,16 @@ class Charts:
         *,
         dial: str = "vix_vote",
         refresh: bool = False,
+        indicators: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         symbol = symbol.strip().upper()
         if not symbol or len(symbol) > 12 or not all(c.isalnum() or c in ".-^" for c in symbol):
             raise ValueError("that does not look like a ticker")
         date.fromisoformat(start)
         date.fromisoformat(end)
+        ind = indicators if indicators is not None else parse_indicators()
         self.freshen(symbol, force=refresh)
-        return {**self._payload(symbol, start, end, dial), "live": self.live(symbol)}
+        return {**self._payload(symbol, start, end, dial, ind), "live": self.live(symbol)}
 
     # -- today, minute by minute ---------------------------------------------------------
 
@@ -234,14 +315,18 @@ class Charts:
         before = own[own["timestamp"].dt.tz_convert(ET).dt.date < session]
         return float(before["close"].iloc[-1]) if not before.empty else None
 
-    def _payload(self, symbol: str, start: str, end: str, dial: str) -> dict[str, Any]:
-        key = (symbol, start, end)
+    def _payload(
+        self, symbol: str, start: str, end: str, dial: str, ind: dict[str, Any]
+    ) -> dict[str, Any]:
+        key = (symbol, start, end, indicator_key(ind))
         with self._lock:
             hit = self._cache.get(key)
         if hit is not None:
             return hit
 
-        data_start = (date.fromisoformat(start) - timedelta(days=WARMUP_DAYS)).isoformat()
+        # enough history before ``start`` that the longest window is warm on day one
+        warm = max(WARMUP_DAYS, int(max_window(ind) * 1.6) + 30)
+        data_start = (date.fromisoformat(start) - timedelta(days=warm)).isoformat()
         vix_bars: pd.DataFrame | None = None
         try:
             vix_bars = load_vix_bars(
@@ -258,10 +343,24 @@ class Charts:
         bars = bars.sort_values("timestamp")
         close = bars.set_index("timestamp")["close"]
         lo = pd.Timestamp(start, tz="UTC")
-        overlays: dict[str, list[dict[str, Any]]] = {}
-        for w in SMA_WINDOWS:
+        overlays: dict[str, Any] = {}
+        for w in ind["sma"]:
             s = cast(pd.Series, signals.sma(close, w))
             overlays[f"sma{w}"] = _series(s[s.index >= lo])
+        for w in ind["ema"]:
+            s = cast(pd.Series, signals.ema(close, w))
+            overlays[f"ema{w}"] = _series(s[s.index >= lo])
+        if ind["bb"]:
+            mid, upper, lower = signals.bollinger(close, ind["bb"]["window"], ind["bb"]["n_std"])
+            overlays["bb"] = {
+                **ind["bb"],
+                "mid": _series(cast(pd.Series, mid)[mid.index >= lo]),
+                "upper": _series(cast(pd.Series, upper)[upper.index >= lo]),
+                "lower": _series(cast(pd.Series, lower)[lower.index >= lo]),
+            }
+        if ind["rsi"]:
+            r = cast(pd.Series, signals.rsi(close, ind["rsi"]["window"]))
+            overlays["rsi"] = {**ind["rsi"], "values": _series(r[r.index >= lo])}
 
         vix_series: list[dict[str, Any]] = []
         exposure: list[dict[str, Any]] = []
@@ -305,6 +404,12 @@ class Charts:
             "end": end,
             "candles": candles,
             "overlays": overlays,
+            "indicators": {
+                "sma": list(ind["sma"]),
+                "ema": list(ind["ema"]),
+                "bb": ind["bb"],
+                "rsi": ind["rsi"],
+            },
             "vix": vix_series,
             "exposure": exposure,
             "dial": dial,

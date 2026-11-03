@@ -423,6 +423,22 @@ window.EHF = (function () {
     let years = Number(q.get('years') || 5);
     let mode = q.get('range') === 'today' ? 'today' : 'daily';
     let timer = null; // auto-refresh while the Today tab is up during the session
+    // Indicator settings live in the URL (so a link carries them) and in the browser's
+    // memory (so the next symbol opens with the same lines). Empty string = off.
+    const IND_KEYS = ['sma', 'ema', 'bb', 'rsi'];
+    let remembered = {}; try { remembered = JSON.parse(localStorage.getItem('ehf.chart.ind') || '{}'); } catch (e) { /* no storage */ }
+    const ind = { sma: '50, 200', ema: '', bb: '', rsi: '' };
+    for (const k of IND_KEYS) { if (q.has(k)) ind[k] = q.get(k); else if (remembered[k] != null) ind[k] = remembered[k]; }
+    function indQuery() { return IND_KEYS.map((k) => `&${k}=${encodeURIComponent(ind[k].trim())}`).join(''); }
+    function rememberInd() { for (const k of IND_KEYS) q.set(k, ind[k].trim()); history.replaceState(null, '', '/lab/chart?' + q.toString()); try { localStorage.setItem('ehf.chart.ind', JSON.stringify(ind)); } catch (e) { /* no storage */ } }
+    const reloadIndicators = debounce(() => { rememberInd(); load(); }, 450);
+    function indicatorBar() {
+      const bar = el('div', 'ind-bar');
+      const field = (k, label, placeholder, width) => `<label class="ind"><span>${label}</span><input type="text" data-ind="${k}" value="${esc(ind[k])}" placeholder="${placeholder}" style="width:${width}px" spellcheck="false"></label>`;
+      bar.innerHTML = `<span class="ind-title">Indicators</span>${field('sma', 'SMA', 'e.g. 50, 200', 92)}${field('ema', 'EMA', 'e.g. 21', 72)}${field('bb', 'Bollinger', 'e.g. 20, 2', 96)}${field('rsi', 'RSI', 'e.g. 14', 56)}<span class="small muted">days; blank turns a line off; up to four per kind</span>`;
+      bar.querySelectorAll('[data-ind]').forEach((i) => i.addEventListener('input', () => { ind[i.dataset.ind] = i.value; reloadIndicators(); }));
+      return bar;
+    }
     const refreshBtn = $('#sym-refresh');
     if (refreshBtn) refreshBtn.addEventListener('click', () => (mode === 'today' ? loadToday(true) : load(true)));
     const rangeBtns = document.querySelectorAll('#sym-range button');
@@ -475,10 +491,12 @@ window.EHF = (function () {
       root.innerHTML = `<h1 class="gradient">${esc(symbol)}</h1><div class="notice"><span class="spin"></span> &nbsp;${refresh ? 'Pulling the latest bars for' : 'Loading'} ${esc(symbol)} since ${start}.</div>`;
       if (refreshBtn) refreshBtn.disabled = true;
       let d;
-      try { d = await getJSON(`/lab/api/bars/${encodeURIComponent(symbol)}?start=${start}&end=${today}${refresh ? '&refresh=1' : ''}`); } catch (e) { root.innerHTML = `<h1>${esc(symbol)}</h1><div class="notice err">${esc(e.message)}</div>`; if (refreshBtn) refreshBtn.disabled = false; return; }
+      try { d = await getJSON(`/lab/api/bars/${encodeURIComponent(symbol)}?start=${start}&end=${today}${refresh ? '&refresh=1' : ''}${indQuery()}`); } catch (e) { root.innerHTML = `<h1>${esc(symbol)}</h1><div class="notice err">${esc(e.message)}</div>`; root.appendChild(indicatorBar()); if (refreshBtn) refreshBtn.disabled = false; return; }
       if (refreshBtn) refreshBtn.disabled = false;
       if (mode !== 'daily') return;
       const t = theme(); const L = d.last || {};
+      const O = d.overlays || {}; const I = d.indicators || { sma: [], ema: [], bb: null, rsi: null };
+      const palette = [t.orange, t.blue, t.magenta, t.aqua];
       const timeIn = d.exposure.length ? d.exposure.reduce((a, x) => a + x.value, 0) / d.exposure.length : null;
       const cur = d.exposure.length ? d.exposure[d.exposure.length - 1].value : null;
       root.innerHTML = `<h1 class="gradient">${esc(symbol)}</h1>
@@ -490,18 +508,34 @@ window.EHF = (function () {
           ${cur != null ? `<div class="kpi"><div class="l">Fear-gauge dial today</div><div class="v ${cur >= 0.95 ? 'pos' : cur < 0.05 ? 'neg' : ''}">${Math.round(cur * 100)}% in</div><div class="s">${esc(d.dial)} · in the market ${fmt.pct(timeIn, 0)} of this span</div></div>` : ''}
         </div>
         <p class="small muted" id="sym-fresh">${freshness(d.live, L.date)}</p>
+        <div id="sym-ind"></div>
         <div class="chart-card"><div class="chart-head" id="sym-head"><h3>${esc(symbol)}, daily</h3></div><div class="chart xtall" id="sym-chart"></div></div>
-        <p class="small muted">Candles are adjusted daily bars. The orange and blue lines are the 50- and 200-day averages. ${d.vix.length ? 'The middle pane is the VIX; the bottom pane is how much of the money the <b>' + esc(d.dial) + '</b> dial would have kept in ' + esc(symbol) + ' on each day, with the out-of-market days shaded on the price.' : 'The VIX family was not available for this symbol, so no dial is drawn.'}</p>`;
+        <p class="small muted">Candles are adjusted daily bars. Solid lines are simple moving averages, dashed ones exponential; Bollinger bands are the grey envelope${I.bb ? ` (${I.bb.window}-day, ${I.bb.n_std}σ)` : ''}. ${I.rsi ? `RSI (${I.rsi.window}) has its own pane with the 30 and 70 lines. ` : ''}${d.vix.length ? 'The VIX pane is the fear gauge; the bottom pane is how much of the money the <b>' + esc(d.dial) + '</b> dial would have kept in ' + esc(symbol) + ' on each day, with the out-of-market days shaded on the price.' : 'The VIX family was not available for this symbol, so no dial is drawn.'}</p>`;
+      $('#sym-ind').appendChild(indicatorBar());
       const host = $('#sym-chart'), head = $('#sym-head');
       const chart = makeChart(host);
       const cs = addCandles(chart, d.candles); addVolume(chart, d.candles);
-      const s50 = addLine(chart, d.overlays.sma50 || [], { color: t.orange, width: 1.5, last: false, priceFormat: { type: 'price', precision: 2, minMove: 0.01 } });
-      const s200 = addLine(chart, d.overlays.sma200 || [], { color: t.blue, width: 1.5, last: false, priceFormat: { type: 'price', precision: 2, minMove: 0.01 } });
-      const items = [{ series: cs, label: 'close', color: t.grey, fmt: fmt.px, last: L.close }, { series: s50, label: 'SMA 50', color: t.orange, fmt: fmt.px, last: last((d.overlays.sma50 || []).map((x) => x.value)) }, { series: s200, label: 'SMA 200', color: t.blue, fmt: fmt.px, last: last((d.overlays.sma200 || []).map((x) => x.value)) }];
+      const items = [{ series: cs, label: 'close', color: t.grey, fmt: fmt.px, last: L.close }];
+      const pxFmt = { type: 'price', precision: 2, minMove: 0.01 };
+      I.sma.forEach((w, i) => { const data = O[`sma${w}`] || []; const ln = addLine(chart, data, { color: palette[i % palette.length], width: 1.5, last: false, priceFormat: pxFmt }); items.push({ series: ln, label: `SMA ${w}`, color: palette[i % palette.length], fmt: fmt.px, last: last(data.map((x) => x.value)) }); });
+      I.ema.forEach((w, i) => { const data = O[`ema${w}`] || []; const c = palette[(i + I.sma.length) % palette.length]; const ln = addLine(chart, data, { color: c, width: 1.5, last: false, dashed: true, priceFormat: pxFmt }); items.push({ series: ln, label: `EMA ${w}`, color: c, fmt: fmt.px, last: last(data.map((x) => x.value)) }); });
+      if (O.bb) {
+        const up = addLine(chart, O.bb.upper, { color: alpha(t.grey, 0.8), width: 1, last: false, priceFormat: pxFmt });
+        addLine(chart, O.bb.mid, { color: alpha(t.grey, 0.5), width: 1, last: false, dashed: true, priceFormat: pxFmt });
+        const lo = addLine(chart, O.bb.lower, { color: alpha(t.grey, 0.8), width: 1, last: false, priceFormat: pxFmt });
+        items.push({ series: up, label: 'BB upper', color: t.grey, fmt: fmt.px, last: last(O.bb.upper.map((x) => x.value)) }, { series: lo, label: 'BB lower', color: t.grey, fmt: fmt.px, last: last(O.bb.lower.map((x) => x.value)) });
+      }
       let pane = 1;
-      if (d.vix.length) { const v = addLine(chart, d.vix, { color: t.yellow, width: 1.5, pane, format: (x) => x.toFixed(1), minMove: 0.1 }); items.push({ series: v, label: 'VIX', color: t.yellow, fmt: (x) => fmt.num(x, 1), last: last(d.vix.map((x) => x.value)) }); pane++; }
-      if (d.exposure.length) { const e = addStepArea(chart, d.exposure.map((x) => ({ time: x.time, value: x.value * 100 })), { color: t.aqua, pane, format: (x) => x.toFixed(0) + '%', minMove: 1 }); items.push({ series: e, label: 'dial', color: t.aqua, fmt: (x) => (fin(x) ? x.toFixed(0) + '%' : '–'), last: cur * 100 }); pane++; }
-      stretch(chart, [3.4, 1, 0.7].slice(0, pane));
+      const factors = [3.4];
+      if (O.rsi) {
+        const r = addLine(chart, O.rsi.values, { color: t.magenta, width: 1.5, pane, format: (x) => x.toFixed(0), minMove: 1 });
+        for (const lvl of [30, 70]) r.createPriceLine({ price: lvl, color: alpha(t.grey, 0.6), lineWidth: 1, lineStyle: LW().LineStyle.Dashed, axisLabelVisible: false });
+        items.push({ series: r, label: `RSI ${O.rsi.window}`, color: t.magenta, fmt: (x) => (fin(x) ? x.toFixed(0) : '–'), last: last(O.rsi.values.map((x) => x.value)) });
+        pane++; factors.push(0.9);
+      }
+      if (d.vix.length) { const v = addLine(chart, d.vix, { color: t.yellow, width: 1.5, pane, format: (x) => x.toFixed(1), minMove: 0.1 }); items.push({ series: v, label: 'VIX', color: t.yellow, fmt: (x) => fmt.num(x, 1), last: last(d.vix.map((x) => x.value)) }); pane++; factors.push(1); }
+      if (d.exposure.length) { const e = addStepArea(chart, d.exposure.map((x) => ({ time: x.time, value: x.value * 100 })), { color: t.aqua, pane, format: (x) => x.toFixed(0) + '%', minMove: 1 }); items.push({ series: e, label: 'dial', color: t.aqua, fmt: (x) => (fin(x) ? x.toFixed(0) + '%' : '–'), last: cur * 100 }); pane++; factors.push(0.7); }
+      stretch(chart, factors);
       legend(chart, head, items, d.candles.map((c) => c.time));
       const ctrl = el('div', 'controls'); head.appendChild(ctrl);
       const bl = bands(chart, host, d.candles.map((c) => c.time));

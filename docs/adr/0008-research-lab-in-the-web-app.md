@@ -57,6 +57,13 @@ which would count a partial day as covered), kept for 60 s, and re-pulled every
 minute by the browser while the market is open. Chart times are Eastern
 wall-clock read as UTC so the axis says 9:30 to 4:00 for every viewer.
 
+Indicators on the daily chart are configurable (`sma=`, `ema=`, `bb=window,n_std`,
+`rsi=` on the bars API; an indicator bar on the page, remembered in the URL and
+the browser). They are computed server-side with the same `signals` functions the
+strategies use, over a warm-up long enough for the longest window, so the lines
+match what a backtest would see. Drawing is TradingView's open-source Lightweight
+Charts (Apache 2.0, attribution logo kept); it draws, we compute.
+
 ## Consequences
 
 - ``ehf.web`` now has an optional dependency on ``ehf.research``; the import is

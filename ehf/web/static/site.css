@@ -201,3 +201,9 @@ table.data td.num,table.data th.num{text-align:right;font-family:var(--mono);fon
 .idea-head h3{margin:0;font-size:17px}
 .idea .details{white-space:pre-wrap;margin:8px 0 0;color:var(--soft);font-size:14px;overflow-wrap:anywhere}
 .idea .meta{margin-top:4px}
+
+/* chart indicator bar */
+.ind-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:6px 0 10px}
+.ind-bar .ind-title{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.ind-bar .ind{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--soft)}
+.ind-bar .ind input{padding:4px 8px;font-size:12.5px;font-family:var(--mono);border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text)}
