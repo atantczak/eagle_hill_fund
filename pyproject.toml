@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ehf"
+version = "0.1.0"
+description = "Eagle Hill Fund research & trading platform (data, signals, backtest, results, analysis)."
+authors = [{ name = "Andrew Antczak" }]
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.1",
+    "numpy>=1.26",
+    "scipy>=1.11",      # robustness stats (PSR/DSR normal CDF/PPF)
+    "matplotlib>=3.8",  # tearsheets
+    "pyarrow>=14",      # parquet: data cache + results store
+    "pydantic>=2.5",    # typed, hashable run specs
+    "python-dotenv>=1.0",
+    "requests>=2.31",      # used by the wrapped FMP tooling
+    "requests-mock>=1.11", # legacy APIClient imports it at module load
+    "psutil>=5.9",         # used by the wrapped ParallelizationTool
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.4", "mypy>=1.9", "pandas-stubs", "types-requests", "types-reportlab", "pre-commit>=3.6"]
+# Cloud results backend (RDS Postgres + S3). Optional: only needed to log/read
+# runs against AWS. `pip install -e '.[rds]'`. See ehf/server/docs/RESULTS_RDS.md.
+rds = ["psycopg[binary]>=3.1", "boto3>=1.34"]
+# Daily market report job (ehf.server.research.reporting): narrative + PDF + AWS delivery.
+report = ["anthropic>=0.60", "reportlab>=4.2", "boto3>=1.34"]
+# eaglehillfund.com (ehf.server.site): FastAPI over the reports bucket. The container
+# pins the same packages in infra/aws/site/requirements.txt.
+site = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "jinja2>=3.1", "markdown>=3.6", "boto3>=1.34", "httpx>=0.27"]
+
+# One package: `ehf`. The quant platform lives in `ehf.server.research`; the
+# legacy FMP/AWS tooling it wraps lives in `ehf.server.{integrations,tools}`.
+[tool.setuptools.packages.find]
+include = ["ehf*"]
+exclude = ["ehf.server.tests*"]  # tests ship with the repo, not the wheel
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["ehf/server/research", "ehf/server/tests"]
+force-exclude = true
+# Lint/format only the platform + tests. The legacy server code and the client
+# placeholder are kept as-is and excluded from the modern toolchain.
+extend-exclude = ["ehf/server/integrations", "ehf/server/tools", "ehf/client"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "PD"]
+# PD008/PD010 are opinionated: `.at` is the correct fast scalar accessor and
+# `.pivot` is correct on guaranteed-unique keys (validate_bars dedups).
+ignore = ["PD008", "PD010"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["ehf/server/research", "ehf/server/site"]
+strict = true
+# The legacy server tooling is untyped code we only touch at the data adapter.
+[[tool.mypy.overrides]]
+module = ["boto3", "boto3.*", "botocore.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["ehf.server.integrations.*", "ehf.server.tools.*", "ehf.client.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+# scipy ships no type stubs.
+[[tool.mypy.overrides]]
+module = ["scipy.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["ehf/server/tests"]
+addopts = "-q"

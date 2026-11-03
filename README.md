@@ -1,15 +1,56 @@
 # The Eagle Hill Fund
-This repository is dedicated to any and all code created by the Eagle Hill Fund.
 
-## Repository Purpose
+This repository holds all code for The Eagle Hill Fund: the quantitative research
+& trading platform, plus the supporting integrations and (eventually) the website.
 
-The repository is, broadly speaking, broken into two purposes.
+![plot](ehf/client/images/ehf_logo.png)
 
-1. The construction of various portions of The Eagle Hill Fund website using Django and React.
-2. Various python utilities that are created by and for The Eagle Hill Fund.
+## Layout
 
-## Future Plans
+Everything lives in one Python package, `ehf`, split into two halves:
 
-This repository could be split into multiple at some point but there is yet to be an impetus for this.
+```
+ehf/
+  client/        front-end (Django/React — placeholder for now)
+  server/
+    research/      ← THE QUANT PLATFORM (data → signals → strategies → backtest → results → analysis)
+    integrations/  external services we wrap: financial (FMP), aws, ...
+    tools/         shared utilities (parallelization, HTTP client, portfolio)
+    tests/         unit + property tests (no network)
+    docs/          architecture, ADRs, the research programme
+    notebooks/     research playgrounds
+    scripts/       benchmarks & one-off tools
+    var/           (git-ignored) generated runtime artifacts: cache, results, universes, logs
+infra/
+  aws/             Terraform + build + ops for what runs in AWS (the daily report Lambda)
+  studio/          the Mac Studio as an always-on research server (launchd jobs, one table)
+```
 
-![plot](eagle_hill_fund/client/images/ehf_logo.png)
+## Start here
+
+**To understand how the whole machine loops together — data in, normalization,
+backtests, strategies, the reproducible results store, and how it reaches AWS —
+read [`ehf/server/docs/ARCHITECTURE.md`](ehf/server/docs/ARCHITECTURE.md).** It's
+the top-to-bottom map; everything else hangs off it.
+
+| Doc | What it covers |
+|-----|----------------|
+| [`docs/ARCHITECTURE.md`](ehf/server/docs/ARCHITECTURE.md) | The full walkthrough — read this first |
+| [`docs/RESEARCH_PROGRAM.md`](ehf/server/docs/RESEARCH_PROGRAM.md) | **The standing research programme**: agenda, kill criteria, nightly loop, conventions |
+| [`docs/COMPLEXITY.md`](ehf/server/docs/COMPLEXITY.md) | Complexity measures & their acceptance gauntlet |
+| [eaglehillfund.com/library](https://eaglehillfund.com/library) | The research library (login). Write-ups are PDFs built by `ehf/server/scripts/build_*.py` into `ehf/server/var/reports/` and published with `python infra/aws/site/ops.py publish-report ...`; never committed. Current: *The Fear Gauge and the Market* (explainer) and *The Fear Gauge, Put to the Test* (results). |
+| [`infra/README.md`](infra/README.md) | Where things run: AWS (daily report) and the Studio (research jobs) |
+| [`docs/REPO_AUDIT.md`](ehf/server/docs/REPO_AUDIT.md) | Original audit of the legacy code (point-in-time) |
+| [`docs/adr/`](ehf/server/docs/adr) | Architecture Decision Records (package layout, results storage, engine build-vs-buy) |
+
+## Quickstart
+
+```bash
+python3.11 -m venv .venv311
+.venv311/bin/pip install -e ".[dev]"
+.venv311/bin/pre-commit install     # ruff + mypy + hygiene on every commit
+.venv311/bin/pytest -q              # run the suite
+```
+
+Pulling real data needs `FMP_API_KEY` in `.env` (see `.env.example`). See the
+Quickstart section of `ARCHITECTURE.md` for runnable snippets that prove the spine.

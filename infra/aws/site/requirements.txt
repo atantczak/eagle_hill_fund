@@ -1,0 +1,7 @@
+# Runtime of the site container only (the research stack is NOT installed here).
+# Keep in step with the `site` extra in pyproject.toml.
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+jinja2==3.1.6
+markdown==3.11.2
+boto3==1.43.36

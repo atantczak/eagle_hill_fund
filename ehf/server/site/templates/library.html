@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Library · {{ org }}{% endblock %}
+{% block content %}
+<div class="eyebrow">Library</div>
+<h1>Write-ups</h1>
+{% if not posts %}<p class="muted">Nothing published yet.</p>{% endif %}
+{% for p in posts %}
+<div class="card">
+  <div class="meta">{{ p.date.strftime('%B %-d, %Y') }}{% if p.author %} · {{ p.author }}{% endif %}</div>
+  <h3><a href="/library/{{ p.slug }}">{{ p.title }}</a></h3>
+  {% if p.summary %}<p style="margin:6px 0 8px">{{ p.summary }}</p>{% endif %}
+  {% for t in p.tags %}<span class="tag">{{ t }}</span>{% endfor %}
+  {% if p.pdf %}<span class="small muted" style="margin-left:8px">· <a href="/library/{{ p.slug }}/file/{{ p.pdf.name }}">PDF</a></span>{% endif %}
+</div>
+{% endfor %}
+
+<h2>Recent daily reports</h2>
+{% if not daily %}<p class="muted">No daily reports in the bucket yet.</p>{% endif %}
+<ul class="plain">
+{% for r in daily %}
+  <li><a href="/daily/{{ r.date.isoformat() }}">{{ r.date.strftime('%A, %B %-d, %Y') }}</a>
+    {% if 'report.pdf' in r.files %}<span class="small muted"> · <a href="/daily/{{ r.date.isoformat() }}/report.pdf">PDF</a></span>{% endif %}</li>
+{% endfor %}
+</ul>
+<p class="small"><a href="/daily">All daily reports →</a></p>
+{% endblock %}

@@ -1,0 +1,120 @@
+"""Report configuration. All knobs in one frozen dataclass, overridable from env."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    return float(raw) if raw else default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    return int(raw) if raw else default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+@dataclass(frozen=True)
+class ReportConfig:
+    """Every threshold the report uses. Defaults are the v1 research choices."""
+
+    # --- universe -----------------------------------------------------------
+    min_market_cap: float = 2e9
+    min_avg_volume: float = 1_000_000.0
+    exchanges: tuple[str, ...] = ("NASDAQ", "NYSE")
+    include_sp500: bool = True
+    max_symbols: int | None = None  # debug: cap the universe for fast local runs
+
+    # --- data windows ---------------------------------------------------------
+    history_calendar_days: int = 400  # ~ 270 trading days: enough for 252d features
+    fetch_workers: int = 16
+    insider_lookback_days: int = 14
+    grades_lookback_days: int = 5
+    earnings_lookback_days: int = 4  # calendar days back to look for "just reported"
+    earnings_lookahead_days: int = 7
+    news_lookback_days: int = 3
+    news_per_symbol: int = 4
+    max_enriched_symbols: int = 40  # per-symbol enrichment calls are capped here
+
+    # --- market dial (the VIX overlay: rules 1-3 vote; see studies.vix_overlay) ---
+    dial_term_out_above: float = 1.0  # VIX/VIX3M above this -> out
+    dial_term_band: float = 0.05  # back in below out_above - band
+    dial_resid_window: int = 63  # rolling beta window for the unexplained-fear residual
+    dial_resid_warn_z: float = 2.0  # residual z above this -> out for a cooldown
+    dial_resid_cooldown: int = 10  # bars out after a warning
+    dial_vrp_rv_window: int = 21  # trailing realized-vol window (bars)
+    dial_vrp_out_below: float = 0.0  # VIX minus realized below this -> out
+    dial_vrp_full_above: float = 4.0  # ... above this -> fully in; between -> half
+    dial_history_calendar_days: int = 400  # VIX history to pull for the dial
+
+    # --- screen thresholds ----------------------------------------------------
+    outlier_z: float = 3.0
+    outlier_min_abs_ret: float = 0.05
+    min_dollar_volume: float = 20e6  # 20-day avg $ volume floor for any hit
+    dislocation_ret_21d: float = -0.12
+    dislocation_dd_63d: float = -0.20
+    quality_min_piotroski: float = 6
+    quality_min_altman: float = 2.6
+    quality_min_fcf_yield: float = 0.03
+    quality_min_roic: float = 0.08
+    quality_max_net_debt_ebitda: float = 3.0
+    quality_min_market_cap: float = 5e9
+    pead_min_surprise: float = 0.05
+    pead_min_reaction: float = 0.03
+    breakout_mom_quantile: float = 0.80
+    breakout_min_vol_ratio: float = 1.3
+    insider_min_insiders: int = 2
+    insider_min_value: float = 500_000.0
+    revision_min_net: int = 2
+    max_hits_per_screen: int = 12
+
+    # --- delivery -------------------------------------------------------------
+    s3_bucket: str | None = None
+    s3_prefix: str = "daily-report"
+    email_from: str | None = None
+    email_to: tuple[str, ...] = field(default_factory=tuple)
+    aws_region: str = "us-east-1"
+    # Presigned links to the HTML/PDF in the email. S3 caps presigned URLs at 7 days, and a
+    # URL signed with the Lambda's own (temporary) role credentials dies when those expire,
+    # so a long-lived read-only "signer" IAM user is used when its keys are configured.
+    link_days: int = 7
+    signer_key_id: str | None = None
+    signer_secret: str | None = None  # never serialised (see job.build_artifacts)
+
+    # --- narrative ------------------------------------------------------------
+    narrative: bool = True
+    anthropic_model: str = "claude-opus-5-5"
+    narrative_effort: str = "high"
+
+    @classmethod
+    def from_env(cls) -> ReportConfig:
+        """Build from ``EHF_REPORT_*`` environment variables (unset -> defaults)."""
+        to_raw = os.getenv("EHF_REPORT_EMAIL_TO", "")
+        email_to = tuple(s.strip() for s in to_raw.split(",") if s.strip())
+        max_symbols_raw = os.getenv("EHF_REPORT_MAX_SYMBOLS")
+        return cls(
+            min_market_cap=_env_float("EHF_REPORT_MIN_MARKET_CAP", cls.min_market_cap),
+            min_avg_volume=_env_float("EHF_REPORT_MIN_AVG_VOLUME", cls.min_avg_volume),
+            max_symbols=int(max_symbols_raw) if max_symbols_raw else None,
+            fetch_workers=_env_int("EHF_REPORT_FETCH_WORKERS", cls.fetch_workers),
+            s3_bucket=os.getenv("EHF_REPORT_BUCKET") or None,
+            s3_prefix=os.getenv("EHF_REPORT_PREFIX", cls.s3_prefix),
+            email_from=os.getenv("EHF_REPORT_EMAIL_FROM") or None,
+            email_to=email_to,
+            aws_region=os.getenv("AWS_REGION", cls.aws_region),
+            link_days=_env_int("EHF_REPORT_LINK_DAYS", cls.link_days),
+            signer_key_id=os.getenv("EHF_REPORT_SIGNER_KEY_ID") or None,
+            signer_secret=os.getenv("EHF_REPORT_SIGNER_SECRET") or None,
+            narrative=_env_bool("EHF_REPORT_NARRATIVE", cls.narrative),
+            anthropic_model=os.getenv("EHF_REPORT_MODEL", cls.anthropic_model),
+            narrative_effort=os.getenv("EHF_REPORT_EFFORT", cls.narrative_effort),
+        )

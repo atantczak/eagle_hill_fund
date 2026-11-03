@@ -1,6 +1,28 @@
 venv/
+.venv/
+.venv311/
 .idea/
 .env
 .DS_Store
 __pycache__/
 *.egg-info/
+
+# EHF research platform local artifacts (never commit data or run results).
+# All generated runtime artifacts live under ehf/server/var/ (cache + results).
+ehf/server/var/
+*.parquet
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# infra: Lambda build artifacts, terraform local files, rendered launchd plists
+infra/aws/build/
+infra/aws/terraform/.terraform/
+infra/aws/terraform/*.tfstate*
+infra/aws/terraform/*tfplan*
+infra/studio/launchd/
+
+# site stack terraform local files
+infra/aws/site/terraform/.terraform/
+infra/aws/site/terraform/*.tfstate*
+infra/aws/site/terraform/*tfplan*
