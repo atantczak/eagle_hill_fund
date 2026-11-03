@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Run {{ config_hash }} · {{ org }}{% endblock %}
+{% block wrapclass %} wide{% endblock %}
+{% block content %}
+<div class="eyebrow"><a href="/lab">Backtests</a></div>
+<div id="run-root" data-hash="{{ config_hash }}">
+  <h1 id="run-title">Loading…</h1>
+  <div class="notice"><span class="spin"></span> &nbsp;Reading the run from the results store.</div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://unpkg.com/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js"></script>
+<script src="/static/lab.js"></script>
+<script>EHF.runPage(document.getElementById('run-root'));</script>
+{% endblock %}

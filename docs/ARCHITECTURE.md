@@ -53,6 +53,7 @@ ehf/
     jobs/        ✅ schedulable entrypoints (refresh_data, ...) + shared job runtime
     paths.py     ✅ the one anchor for every var/ path
   web/           ✅ eaglehillfund.com: FastAPI + Jinja over the reports bucket, Cognito at the ALB
+    lab/         ✅ backtest browser, playground, any-ticker charts (lightweight-charts; local-first, ADR-0008)
   integrations/  Financial Modeling Prep client (the data source research/data wraps)
   tools/         legacy utilities the FMP client depends on (parallelization, HTTP client, portfolio)
   tests/         ✅ unit tests, mirror research/ and web/ (no network)

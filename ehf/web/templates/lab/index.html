@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Backtests · {{ org }}{% endblock %}
+{% block wrapclass %} wide{% endblock %}
+{% block content %}
+<div class="eyebrow">Lab</div>
+<h1>Backtests</h1>
+<p class="lede">Every walk-forward study and every stored run, straight from the results store. Click a row to see it charted.</p>
+
+<div class="toolbar">
+  <div class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-tab="studies">Studies <span class="muted">({{ studies|length }})</span></button>
+    <button role="tab" aria-selected="false" data-tab="runs">Runs</button>
+  </div>
+  <span class="spacer"></span>
+  <a class="btn sm" href="/lab/play">New run in the playground →</a>
+</div>
+
+<section id="tab-studies">
+<p class="small muted">A study optimizes each rule on a training window, then trades the next year with those settings, and stitches the out-of-sample years together. Numbers below are out-of-sample only.</p>
+<div class="table"><table class="data" id="studies">
+<thead><tr>
+  <th class="sortable" data-k="strategy">Strategy</th>
+  <th>Verdict</th>
+  <th class="num sortable" data-k="sharpe">Sharpe</th>
+  <th class="num sortable" data-k="cagr">CAGR</th>
+  <th class="num sortable" data-k="max_drawdown">Max DD</th>
+  <th class="num sortable" data-k="sharpe_cost_x2">Sharpe @2× cost</th>
+  <th class="num sortable" data-k="time_in_market">Time in</th>
+  <th class="num sortable" data-k="switches_per_year">Switches/yr</th>
+  <th class="num sortable" data-k="dd_2020">2020</th>
+  <th class="num sortable" data-k="dd_2022">2022</th>
+  <th class="num">Windows</th>
+  <th>Objective</th>
+  <th>Span</th>
+</tr></thead>
+<tbody>
+{% for s in studies %}
+<tr class="link" data-href="/lab/run/{{ s.stitched_hash }}"
+    data-strategy="{{ s.strategy }}" data-sharpe="{{ s.metrics.get('sharpe') if s.metrics.get('sharpe') is not none else '' }}" data-cagr="{{ s.metrics.get('cagr') if s.metrics.get('cagr') is not none else '' }}"
+    data-max_drawdown="{{ s.metrics.get('max_drawdown') if s.metrics.get('max_drawdown') is not none else '' }}" data-sharpe_cost_x2="{{ s.metrics.get('sharpe_cost_x2') if s.metrics.get('sharpe_cost_x2') is not none else '' }}"
+    data-time_in_market="{{ s.time_in_market if s.time_in_market is not none else '' }}" data-switches_per_year="{{ s.switches_per_year if s.switches_per_year is not none else '' }}"
+    data-dd_2020="{{ s.dd_2020 if s.dd_2020 is not none else '' }}" data-dd_2022="{{ s.dd_2022 if s.dd_2022 is not none else '' }}">
+  <td><b>{{ s.strategy }}</b><div class="faint small mono">{{ s.wf_id }}</div></td>
+  <td>{% if s.verdict == 'pass' %}<span class="pill pass">pass</span>{% elif s.verdict %}<span class="pill fail">{{ s.verdict }}</span>{% else %}<span class="pill neutral">—</span>{% endif %}
+      {% if s.failed %}<div class="faint small">{{ s.failed|join(', ') }}</div>{% endif %}</td>
+  <td class="num">{{ '%.2f'|format(s.metrics.get('sharpe')) if s.metrics.get('sharpe') is not none else '–' }}</td>
+  <td class="num {{ 'pos' if (s.metrics.get('cagr') or 0) > 0 else 'neg' }}">{{ '%.1f%%'|format(s.metrics.get('cagr')*100) if s.metrics.get('cagr') is not none else '–' }}</td>
+  <td class="num neg">{{ '%.1f%%'|format(s.metrics.get('max_drawdown')*100) if s.metrics.get('max_drawdown') is not none else '–' }}</td>
+  <td class="num">{{ '%.2f'|format(s.metrics.get('sharpe_cost_x2')) if s.metrics.get('sharpe_cost_x2') is not none else '–' }}</td>
+  <td class="num">{{ '%.0f%%'|format(s.time_in_market*100) if s.time_in_market is not none else '–' }}</td>
+  <td class="num">{{ '%.1f'|format(s.switches_per_year) if s.switches_per_year is not none else '–' }}</td>
+  <td class="num neg">{{ '%.0f%%'|format(s.dd_2020*100) if s.dd_2020 is not none else '–' }}</td>
+  <td class="num neg">{{ '%.0f%%'|format(s.dd_2022*100) if s.dd_2022 is not none else '–' }}</td>
+  <td class="num">{{ s.n_windows }}</td>
+  <td class="mono small">{{ s.objective }} · {{ s.train_months }}/{{ s.test_months }}m</td>
+  <td class="mono small">{{ s.start }} → {{ s.end }}</td>
+</tr>
+{% endfor %}
+{% if not studies %}<tr><td colspan="13" class="muted">No scorecards in var/scorecards yet.</td></tr>{% endif %}
+</tbody></table></div>
+</section>
+
+<section id="tab-runs" hidden>
+<div class="toolbar">
+  <select id="run-strategy"><option value="">All strategies</option>
+    {% for s in strategies %}<option value="{{ s.strategy }}">{{ s.strategy }} ({{ s.n }})</option>{% endfor %}
+  </select>
+  <label class="check"><input type="checkbox" id="run-standalone" checked> Standalone runs only (hide sweep cells)</label>
+  <input type="text" id="run-search" placeholder="filter by hash, params, universe…" style="min-width:260px">
+  <span class="spacer"></span>
+  <span class="small muted" id="run-count"></span>
+</div>
+<div class="table"><table class="data" id="runs">
+<thead><tr>
+  <th>Run</th><th class="sortable" data-k="strategy">Strategy</th><th>Params</th><th>Universe</th><th>Span</th>
+  <th class="num sortable" data-k="m_sharpe">Sharpe</th><th class="num sortable" data-k="m_cagr">CAGR</th>
+  <th class="num sortable" data-k="m_max_drawdown">Max DD</th><th class="num sortable" data-k="m_n_trades">Trades</th>
+  <th class="sortable sorted" data-k="created_at">Logged</th>
+</tr></thead>
+<tbody></tbody></table></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="/static/lab.js"></script>
+<script>EHF.browser();</script>
+{% endblock %}

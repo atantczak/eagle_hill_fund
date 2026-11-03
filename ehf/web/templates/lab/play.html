@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Playground · {{ org }}{% endblock %}
+{% block wrapclass %} wide{% endblock %}
+{% block content %}
+<div class="eyebrow">Lab</div>
+<h1>Playground</h1>
+<p class="lede">Pick a strategy, set the knobs, run it. Same engine, same costs, same data as the studies. Nothing is saved unless you tick <em>log</em>.</p>
+<div class="play" id="play-root">
+  <aside class="card panel">
+    <form id="play-form" autocomplete="off">
+      <h3>Strategy</h3>
+      <div class="field"><select id="f-strategy"></select><div class="small muted" id="f-doc"></div></div>
+      <div id="f-universe"></div>
+      <div class="row">
+        <div class="field"><label>Start</label><input type="date" id="f-start" value="2010-01-01" min="2000-01-03" max="{{ today }}"></div>
+        <div class="field"><label>End</label><input type="date" id="f-end" value="{{ today }}" min="2000-01-03" max="{{ today }}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Slippage (bps)</label><input type="number" id="f-slip" value="1" min="0" max="50" step="0.5"></div>
+        <div class="field"><label>Fill</label><select id="f-fill"><option value="next_open">Next open</option><option value="next_close">Next close</option></select></div>
+      </div>
+      <hr>
+      <h3>Parameters</h3>
+      <div id="f-params"></div>
+      <hr>
+      <div class="actions" style="margin:0 0 10px">
+        <button class="btn primary" type="submit" id="f-run">Run</button>
+        <button class="btn quiet" type="button" id="f-reset">Defaults</button>
+      </div>
+      <label class="check"><input type="checkbox" id="f-auto" checked> Run on change</label>
+      <label class="check"><input type="checkbox" id="f-log"> Log to the results store</label>
+      <hr>
+      <h3>This session</h3>
+      <div class="history" id="f-history"><div class="small muted">Runs you make show up here; click one to go back to it.</div></div>
+    </form>
+  </aside>
+  <main id="play-main">
+    <div class="notice">Set the knobs and hit <b>Run</b>. The first run on a new asset loads its history; later ones are instant.</div>
+  </main>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://unpkg.com/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js"></script>
+<script src="/static/lab.js"></script>
+<script>EHF.playground(document.getElementById('play-root'), {{ catalog|tojson }}, {{ presets|tojson }});</script>
+{% endblock %}

@@ -13,10 +13,13 @@ Routes (the load balancer enforces a Cognito login on every path except
     GET /daily/{date}/{name}       report.pdf / report.md / ...
     GET /logout                    expire the ALB session, bounce through Cognito's logout
     GET /me                        who the ALB says you are
+    /lab/...                       the research lab (ehf.web.lab) — only when the research
+                                   platform is importable, i.e. locally, never in the container
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -30,6 +33,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
@@ -37,7 +41,9 @@ from ehf.web.auth import alb_cookie_names, logout_url, user_from_headers
 from ehf.web.config import SiteConfig
 from ehf.web.library import Library, Post
 
+log = logging.getLogger(__name__)
 TEMPLATES = Path(__file__).parent / "templates"
+STATIC = Path(__file__).parent / "static"
 SECURITY_HEADERS = {
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
     "X-Content-Type-Options": "nosniff",
@@ -83,7 +89,25 @@ def _file_response(
     return StreamingResponse(_stream(body), media_type=content_type, headers=headers)
 
 
-def create_app(cfg: SiteConfig | None = None, library: Library | None = None) -> FastAPI:
+def lab_available(mode: str) -> bool:
+    """Decide whether /lab mounts: 'on', 'off', or 'auto' (= research importable)."""
+    if mode == "off":
+        return False
+    try:
+        import ehf.web.lab.routes  # noqa: F401
+    except ImportError:
+        if mode == "on":
+            raise
+        return False
+    return True
+
+
+def create_app(
+    cfg: SiteConfig | None = None, library: Library | None = None, lab: Any | None = None
+) -> FastAPI:
+    """Build the app. ``lab`` is an optional ``(data, playground, charts)`` triple
+    (tests inject fakes); by default the lab mounts when the research platform
+    imports, with the local results store and the FMP provider."""
     cfg = cfg or SiteConfig.from_env()
     if library is None:
         import boto3  # local import: tests inject a fake and never need boto3
@@ -99,8 +123,10 @@ def create_app(cfg: SiteConfig | None = None, library: Library | None = None) ->
 
     app = FastAPI(title=cfg.org_name, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(SecurityHeaders)
+    app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+    with_lab = lab is not None or lab_available(cfg.lab)
     templates = Jinja2Templates(directory=str(TEMPLATES))
-    templates.env.globals.update(org=cfg.org_name, site_url=cfg.site_url)
+    templates.env.globals.update(org=cfg.org_name, site_url=cfg.site_url, lab=with_lab)
 
     def page(request: Request, name: str, **ctx: Any) -> HTMLResponse:
         user = user_from_headers(request.headers)
@@ -171,6 +197,19 @@ def create_app(cfg: SiteConfig | None = None, library: Library | None = None) ->
         return JSONResponse(
             {"email": user.email, "name": user.name} if user else {"email": None, "name": None}
         )
+
+    if with_lab:
+        from ehf.web.lab.routes import default_components, mount_lab
+
+        try:
+            data, playground, charts = lab if lab is not None else default_components()
+        except Exception:
+            if cfg.lab == "on" or lab is not None:
+                raise
+            log.exception("lab disabled: could not build its components")
+            templates.env.globals["lab"] = False
+        else:
+            mount_lab(app, page, data=data, playground=playground, charts=charts)
 
     return app
 

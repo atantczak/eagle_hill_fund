@@ -1,11 +1,29 @@
 {% extends "base.html" %}
 {% block content %}
+<div class="hero">
 <div class="eyebrow">Eagle Hill Fund</div>
-<h1>Systematic research, written down.</h1>
-<p class="lede">{% if user %}Welcome back, {{ user.display }}. {% endif %}The fund's research write-ups and the daily market report, in one private place. Everything here is a working document: real data, honest tests, plain English.</p>
-<div class="actions">
-  <a class="btn" href="/library">Open the library</a>
-  <a class="btn quiet" href="/daily">Today's report</a>
+<h1 class="gradient">Systematic research, written down.</h1>
+<p class="lede">{% if user %}Welcome back, {{ user.display }}. {% endif %}The fund's research write-ups, the daily market report{% if lab %}, and the lab where the backtests live{% endif %}. Everything here is a working document: real data, honest tests, plain English.</p>
+<div class="grid cards">
+  <a class="card link" href="/library">
+    <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div>
+    <h3>Library</h3><p>Write-ups and the studies behind them, as PDFs you can read here or send on.</p>
+  </a>
+  <a class="card link" href="/daily">
+    <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>
+    <h3>Daily report</h3><p>Every morning at 6:30 ET: screens, unusual moves, the market dial, one idea.</p>
+  </a>
+  {% if lab %}
+  <a class="card link" href="/lab">
+    <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg></div>
+    <h3>Backtests</h3><p>Every stored run and walk-forward study, charted. Click anything.</p>
+  </a>
+  <a class="card link" href="/lab/play">
+    <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></svg></div>
+    <h3>Playground</h3><p>Pick a strategy, drag the sliders, watch the curve move. Any ticker.</p>
+  </a>
+  {% endif %}
 </div>
-<p class="muted small">Access is by invitation. Signing out ends the session for this whole site.</p>
+<p class="muted small" style="margin-top:22px">Access is by invitation. Signing out ends the session for this whole site.</p>
+</div>
 {% endblock %}

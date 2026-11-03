@@ -17,6 +17,7 @@ class SiteConfig:
     region: str = "us-east-1"
     cache_ttl_s: float = 60.0
     org_name: str = "The Eagle Hill Fund"
+    lab: str = "auto"  # "auto" (on when ehf.research imports), "on", "off"
 
     @classmethod
     def from_env(cls) -> SiteConfig:
@@ -30,4 +31,5 @@ class SiteConfig:
             cognito_client_id=os.getenv("EHF_COGNITO_CLIENT_ID", d.cognito_client_id),
             region=os.getenv("AWS_REGION", d.region),
             cache_ttl_s=float(os.getenv("EHF_SITE_CACHE_TTL", d.cache_ttl_s)),
+            lab=os.getenv("EHF_LAB", d.lab).strip().lower(),
         )

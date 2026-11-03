@@ -70,6 +70,7 @@ def bucket() -> FakeS3:
 @pytest.fixture
 def client(bucket: FakeS3) -> TestClient:
     cfg = SiteConfig(
+        lab="off",
         site_url="https://eaglehillfund.com",
         cognito_domain="auth.example.com",
         cognito_client_id="abc",
@@ -127,7 +128,7 @@ def test_library_daily_ignores_latest(bucket: FakeS3) -> None:
 def test_public_pages(client: TestClient) -> None:
     assert client.get("/healthz").json() == {"ok": True}
     r = client.get("/")
-    assert r.status_code == 200 and "Open the library" in r.text
+    assert r.status_code == 200 and "Systematic research" in r.text and "theme-toggle" in r.text
     assert r.headers["X-Frame-Options"] == "SAMEORIGIN"
     assert "max-age=31536000" in r.headers["Strict-Transport-Security"]
 
