@@ -129,11 +129,11 @@ window.EHF = (function () {
   function runView(root, p, opts = {}) {
     root.innerHTML = '';
     const t = theme(); const S = p.series; const times = S.time; const hasB = !!S.benchmark;
-    const m = p.metrics || {}, b = p.benchmark_metrics || {};
+    const m = p.metrics || {}, b = p.benchmark_metrics || {}; const bname = p.benchmark || p.asset;
     const timeIn = S.exposure && S.exposure.length ? S.exposure.reduce((a, v) => a + Math.min(1, Math.abs(v || 0)), 0) / S.exposure.length : null;
 
     const kp = el('div', 'kpis');
-    const sub = (f, k) => (hasB && b[k] != null ? `${esc(p.asset)} <b>${f(b[k])}</b>` : '');
+    const sub = (f, k) => (hasB && b[k] != null ? `${esc(bname)} <b>${f(b[k])}</b>` : '');
     const tiles = [
       ['CAGR', fmt.pct(m.cagr), sub(fmt.pct, 'cagr'), m.cagr],
       ['Sharpe', fmt.num(m.sharpe), sub(fmt.num, 'sharpe'), null],
@@ -161,7 +161,7 @@ window.EHF = (function () {
     chart.priceScale('right').applyOptions({ mode: LW().PriceScaleMode.Logarithmic });
     const items = [{ series: eq, label: p.strategy, color: t.blue, fmt: fmt.money, last: last(S.equity) }];
     if (ghost) items.push({ series: ghost, label: 'previous run', color: t.magenta, fmt: fmt.money, last: last(opts.ghost.equity) });
-    if (bench) items.push({ series: bench, label: `${p.asset} buy & hold`, color: t.grey, fmt: fmt.money, last: last(S.benchmark) });
+    if (bench) items.push({ series: bench, label: `${bname} buy & hold`, color: t.grey, fmt: fmt.money, last: last(S.benchmark) });
     items.push({ series: dd, label: 'drawdown', color: t.down, fmt: (v) => (fin(v) ? v.toFixed(1) + '%' : '–'), last: last(S.drawdown) * 100 });
     items.push({ series: ex, label: 'exposure', color: t.aqua, fmt: (v) => (fin(v) ? v.toFixed(0) + '%' : '–'), last: last(S.exposure) * 100 });
     legend(chart, head, items, times);
@@ -199,14 +199,14 @@ window.EHF = (function () {
     // yearly returns + windows
     const two = el('div', 'two'); root.appendChild(two);
     const yt = el('div', 'table');
-    yt.innerHTML = `<table class="data"><thead><tr><th>Year</th><th class="num">${esc(p.strategy)}</th>${hasB ? `<th class="num">${esc(p.asset)}</th><th class="num">Excess</th>` : ''}</tr></thead><tbody>${(p.yearly || []).map((y) => { const ex = hasB && fin(y.benchmark) && fin(y.strategy) ? y.strategy - y.benchmark : null; return `<tr><td class="mono">${y.year}</td><td class="num ${signCls(y.strategy)}">${fmt.pct(y.strategy)}</td>${hasB ? `<td class="num ${signCls(y.benchmark)}">${fmt.pct(y.benchmark)}</td><td class="num ${signCls(ex)}">${fmt.sign(ex)}<span class="bar ${ex < 0 ? 'neg' : ''}" style="width:${Math.min(60, Math.abs(ex || 0) * 150)}px"></span></td>` : ''}</tr>`; }).join('')}</tbody></table>`;
+    yt.innerHTML = `<table class="data"><thead><tr><th>Year</th><th class="num">${esc(p.strategy)}</th>${hasB ? `<th class="num">${esc(bname)}</th><th class="num">Excess</th>` : ''}</tr></thead><tbody>${(p.yearly || []).map((y) => { const ex = hasB && fin(y.benchmark) && fin(y.strategy) ? y.strategy - y.benchmark : null; return `<tr><td class="mono">${y.year}</td><td class="num ${signCls(y.strategy)}">${fmt.pct(y.strategy)}</td>${hasB ? `<td class="num ${signCls(y.benchmark)}">${fmt.pct(y.benchmark)}</td><td class="num ${signCls(ex)}">${fmt.sign(ex)}<span class="bar ${ex < 0 ? 'neg' : ''}" style="width:${Math.min(60, Math.abs(ex || 0) * 150)}px"></span></td>` : ''}</tr>`; }).join('')}</tbody></table>`;
     two.appendChild(yt);
     if (p.windows && p.windows.length) {
       const wt = el('div', 'table');
       wt.innerHTML = `<table class="data"><thead><tr><th>#</th><th>Out-of-sample year</th><th>Chosen settings</th><th class="num">Sharpe</th><th class="num">CAGR</th><th class="num">Max DD</th></tr></thead><tbody>${p.windows.map((w) => `<tr><td class="mono">${w.window}</td><td class="mono small">${w.test_start} → ${w.test_end}</td><td class="small mono">${esc(paramsShort(w.params))}</td><td class="num">${fmt.num(w.oos_sharpe)}</td><td class="num ${signCls(w.oos_cagr)}">${fmt.pct(w.oos_cagr)}</td><td class="num neg">${fmt.pct(w.oos_max_drawdown)}</td></tr>`).join('')}</tbody></table>`;
       two.appendChild(wt);
     } else {
-      const info = el('div', 'notice', `<b>How to read this.</b> The blue line is the strategy, grey is buying and holding ${esc(p.asset)}. The middle pane is how far below its own peak each one sits. The bottom pane is how much of the money was in the market. Costs: ${esc(costsText(p.costs))}; fills at the ${esc(String(p.fill_model || '').replace('_', ' '))}.`);
+      const info = el('div', 'notice', `<b>How to read this.</b> The blue line is the strategy, grey is buying and holding ${esc(bname)}. The middle pane is how far below its own peak each one sits. The bottom pane is how much of the money was in the market. Costs: ${esc(costsText(p.costs))}; fills at the ${esc(String(p.fill_model || '').replace('_', ' '))}.`);
       two.appendChild(info);
     }
     return { chart };
@@ -310,16 +310,24 @@ window.EHF = (function () {
         if (p.type === 'str') { const w = el('div', 'field'); w.innerHTML = `<label>${esc(p.name)}</label><input type="text" data-p="${p.name}" value="${esc(v)}">`; f.params.appendChild(w); continue; }
         const w = el('div', 'slider');
         const step = p.step, min = p.min, max = p.max;
-        w.innerHTML = `<div class="lbl"><span>${esc(p.name)}</span><span class="d">default ${esc(p.default)}</span></div><input type="range" data-p="${p.name}" min="${min}" max="${max}" step="${step}" value="${v}"><input type="number" data-n="${p.name}" min="${min}" max="${max}" step="${step}" value="${v}">${p.grid ? `<div class="grid-marks">study grid: ${p.grid.join(' · ')}</div>` : ''}`;
+        // The typed number is the value that runs; the slider is a convenience that snaps to
+        // ~40 stops. The number box itself takes any value (step "any" for floats), inside
+        // or outside the slider's range, so the browser never rejects a hand-typed 30.
+        w.innerHTML = `<div class="lbl"><span>${esc(p.name)}</span><span class="d">default ${esc(p.default)}</span></div><input type="range" data-r="${p.name}" min="${min}" max="${max}" step="${step}" value="${v}"><input type="number" data-p="${p.name}" data-default="${esc(p.default)}" step="${p.type === 'int' ? 1 : 'any'}" value="${v}">${p.grid ? `<div class="grid-marks">study grid: ${p.grid.join(' · ')}</div>` : ''}`;
         const r = w.querySelector('[type=range]'), n = w.querySelector('[type=number]');
         r.addEventListener('input', () => { n.value = r.value; scheduleSlider(); });
-        n.addEventListener('input', () => { r.value = n.value; scheduleSlider(); });
+        n.addEventListener('input', () => { if (n.value !== '' && isFinite(Number(n.value))) { r.value = n.value; scheduleSlider(); } });
         f.params.appendChild(w);
       }
     }
     function readParams() {
       const out = {};
-      f.params.querySelectorAll('[data-p]').forEach((i) => { const k = i.dataset.p; if (i.type === 'checkbox') out[k] = i.checked; else if (i.type === 'range') out[k] = Number(i.value); else out[k] = i.value; });
+      f.params.querySelectorAll('[data-p]').forEach((i) => {
+        const k = i.dataset.p;
+        if (i.type === 'checkbox') out[k] = i.checked;
+        else if (i.type === 'number') { const n = Number(i.value); out[k] = i.value !== '' && isFinite(n) ? n : Number(i.dataset.default); }
+        else out[k] = i.value;
+      });
       return out;
     }
     function request() {

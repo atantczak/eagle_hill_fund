@@ -16,7 +16,7 @@ The lab is a sub-package of the site, ``ehf/web/lab``, mounted under ``/lab`` by
 the same FastAPI app, behind the same Cognito login when deployed:
 
 - ``data.py`` reads the local results store and ``var/scorecards`` and builds
-  one JSON payload per run: equity vs. buy-and-hold, drawdowns, exposure
+  one JSON payload per run: equity vs. buy-and-hold (SPY, or the timed asset for a dial), drawdowns, exposure
   rebuilt from the trade ledger (with resets at walk-forward window starts),
   candles of the primary asset with trade markers, yearly returns, windows.
 - ``playground.py`` turns the strategy registry into a form (ranges from the
