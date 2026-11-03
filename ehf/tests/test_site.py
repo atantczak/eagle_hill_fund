@@ -198,13 +198,24 @@ def test_me_and_logout(client: TestClient) -> None:
     assert r.headers["location"].startswith(
         "https://auth.example.com/logout?client_id=abc&logout_uri=https%3A%2F%2Feaglehillfund.com%2F"
     )
-    assert "AWSELBAuthSessionCookie-0=" in r.headers["set-cookie"]
-    assert "other=" not in r.headers["set-cookie"]
+    cookies = [v for k, v in r.headers.multi_items() if k == "set-cookie"]
+    assert r.headers["cache-control"] == "no-store"
+    assert not any(c.startswith("other=") for c in cookies)
+    # every shard the ALB can issue, host-only and domain-scoped, expired at the epoch
+    for i in range(4):
+        mine = [c for c in cookies if c.startswith(f"AWSELBAuthSessionCookie-{i}=")]
+        assert len(mine) == 2
+        assert sum("Domain=testserver" in c for c in mine) == 1
+        for c in mine:
+            assert "Max-Age=0" in c and "expires=Thu, 01 Jan 1970 00:00:00 GMT" in c
+            assert "Path=/" in c and "Secure" in c and "HttpOnly" in c
 
 
 def test_logout_url_without_cognito() -> None:
     assert logout_url(SiteConfig()) == "/"
-    assert alb_cookie_names("AWSELBAuthSessionCookie-0=a; AWSELBAuthSessionCookie-1=b; x=1") == [
-        "AWSELBAuthSessionCookie-0",
-        "AWSELBAuthSessionCookie-1",
+    shards = [f"AWSELBAuthSessionCookie-{i}" for i in range(4)]
+    assert alb_cookie_names("") == shards
+    assert alb_cookie_names("AWSELBAuthSessionCookie-0=a; AWSELBAuthSessionCookie-9=b; x=1") == [
+        *shards,
+        "AWSELBAuthSessionCookie-9",
     ]
