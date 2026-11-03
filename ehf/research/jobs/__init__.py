@@ -7,6 +7,7 @@ summary — nothing else. All research logic lives in the libraries they call.
 
   refresh_data     nightly price-cache + universe-snapshot refresh (data.refresh)
   vix_study        weekly VIX overlay study (walk-forward + gauntlet -> scorecards)
+  leverage_study   monthly leverage study (3x vs plain fund when the market turns bullish)
   sync_var         nightly copy of var/ up to S3 for the deployed lab (ADR-0009)
   (next)           research_batch: backlog -> walk-forward -> gauntlet -> scorecards
 

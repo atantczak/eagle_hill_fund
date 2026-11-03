@@ -3,14 +3,16 @@
 
     python infra/aws/site/ops.py publish-report --slug vix-explainer --title "..." \
         --date 2026-11-02 --summary "..." --file var/reports/VIX_SPY_Explainer.pdf \
-        [--file more.md] [--tags vix,spy] [--body-md notes.md] [--author "Andrew Antczak"]
+        [--file more.md] [--tags vix,spy] [--body-md notes.md] [--author "Andrew Antczak"] \
+        [--study leverage] [--run HASH=label ...] [--idea ID ...]   # the thread (ADR-0011)
+    python infra/aws/site/ops.py link --slug SLUG --study vix_overlay --run HASH=label --idea ID
     python infra/aws/site/ops.py list                      # what is in the library
     python infra/aws/site/ops.py unpublish --slug SLUG --yes
     python infra/aws/site/ops.py status                    # ECS deployments + target health
     python infra/aws/site/ops.py logs [--minutes 30]       # tail the container log
     python infra/aws/site/ops.py user --email X --name Y   # invite someone (see terraform.tfvars)
     python infra/aws/site/ops.py ideas                     # the ideas box (newest first)
-    python infra/aws/site/ops.py ideas --set ID --status planned --note "..."
+    python infra/aws/site/ops.py ideas --set ID --status done --note "..." --link /library/SLUG
 
 Files are stored under library/<slug>/ in the reports bucket next to a meta.json;
 the site lists whatever is there (new posts show within a minute).
@@ -56,6 +58,29 @@ def _content_type(path: Path) -> str:
     )
 
 
+def _run_links(items: list[str]) -> list[dict[str, str]]:
+    """``HASH`` or ``HASH=label`` -> ``{"hash", "label"}``, validated like the site does."""
+    sys.path.insert(0, str(ROOT))
+    from ehf.web.library import HASH_RE
+
+    out = []
+    for item in items:
+        h, _, label = item.partition("=")
+        h = h.strip().lower()
+        if not HASH_RE.match(h):
+            raise SystemExit(f"not a run hash: {h!r} (16 hex characters)")
+        out.append({"hash": h, "label": label.strip()})
+    return out
+
+
+def _thread_fields(args: argparse.Namespace) -> dict[str, object]:
+    return {
+        "study": (args.study or "").strip().lower(),
+        "runs": _run_links(args.run or []),
+        "ideas": [i.strip() for i in (args.idea or []) if i.strip()],
+    }
+
+
 def publish(args: argparse.Namespace) -> int:
     if not SLUG_RE.match(args.slug):
         print(f"slug must match {SLUG_RE.pattern}", file=sys.stderr)
@@ -91,15 +116,51 @@ def publish(args: argparse.Namespace) -> int:
         "files": files,
         "author": args.author,
         "published_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        **_thread_fields(args),
     }
-    key = f"{PREFIX}/{args.slug}/meta.json"
-    s3.put_object(
+    _put_meta(s3, bucket, args.slug, meta)
+    print(f"published {args.slug}: {args.title} -> https://eaglehillfund.com/library/{args.slug}")
+    return 0
+
+
+def _put_meta(s3: object, bucket: str, slug: str, meta: dict[str, object]) -> None:
+    s3.put_object(  # type: ignore[attr-defined]
         Bucket=bucket,
-        Key=key,
+        Key=f"{PREFIX}/{slug}/meta.json",
         Body=json.dumps(meta, indent=1).encode(),
         ContentType="application/json",
     )
-    print(f"published {args.slug}: {args.title} -> https://eaglehillfund.com/library/{args.slug}")
+
+
+def link(args: argparse.Namespace) -> int:
+    """Attach (or replace) the study, runs and ideas behind an existing write-up."""
+    bucket = bucket_name()
+    s3 = boto3.client("s3", region_name=REGION)
+    key = f"{PREFIX}/{args.slug}/meta.json"
+    try:
+        meta = json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
+    except s3.exceptions.NoSuchKey:
+        print(f"no write-up under slug {args.slug!r}", file=sys.stderr)
+        return 1
+    fields = _thread_fields(args)
+    if args.clear:
+        meta.update(fields)
+    else:
+        if fields["study"]:
+            meta["study"] = fields["study"]
+        have = {r["hash"]: r for r in meta.get("runs", [])}
+        for r in fields["runs"]:  # type: ignore[union-attr]
+            have[r["hash"]] = r
+        meta["runs"] = list(have.values())
+        meta["ideas"] = list(dict.fromkeys([*meta.get("ideas", []), *fields["ideas"]]))  # type: ignore[misc]
+    meta["linked_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+    _put_meta(s3, bucket, args.slug, meta)
+    runs = ", ".join(
+        f"{r['hash']}{'=' + r['label'] if r.get('label') else ''}" for r in meta["runs"]
+    )
+    print(
+        f"{args.slug}: study={meta.get('study') or '-'} runs=[{runs}] ideas={meta.get('ideas', [])}"
+    )
     return 0
 
 
@@ -232,8 +293,8 @@ def ideas(args: argparse.Namespace) -> int:
         if not args.status:
             print(f"--status is required: {', '.join(STATUSES)}", file=sys.stderr)
             return 2
-        idea = box.set_status(args.set, args.status, args.note)
-        print(f"{idea.id}: {idea.status}  {idea.title}")
+        idea = box.set_status(args.set, args.status, args.note, args.link)
+        print(f"{idea.id}: {idea.status}  {idea.title}{'  -> ' + idea.link if idea.link else ''}")
         return 0
     rows = box.list()
     if args.status:
@@ -248,8 +309,26 @@ def ideas(args: argparse.Namespace) -> int:
                 print(f"{'':24s}  {line}")
         if i.note:
             print(f"{'':24s}  -> {i.note}")
+        if i.link:
+            print(f"{'':24s}  -> https://eaglehillfund.com{i.link}")
     print(f"{len(rows)} idea(s)")
     return 0
+
+
+def _thread_args(sp: argparse.ArgumentParser) -> None:
+    sp.add_argument(
+        "--study", default=None, help="study key its scorecards carry (vix_overlay, leverage)"
+    )
+    sp.add_argument(
+        "--run",
+        action="append",
+        default=[],
+        metavar="HASH[=LABEL]",
+        help="a run behind it; repeatable",
+    )
+    sp.add_argument(
+        "--idea", action="append", default=[], metavar="ID", help="an ideas-box id; repeatable"
+    )
 
 
 def main() -> int:
@@ -273,6 +352,12 @@ def main() -> int:
         "--body-md", default=None, help="markdown file rendered above the embedded PDF"
     )
     pub.add_argument("--author", default="Andrew Antczak")
+    for sp in (pub,):
+        _thread_args(sp)
+    ln = sub.add_parser("link", help="attach the study / runs / ideas behind a published write-up")
+    ln.add_argument("--slug", required=True)
+    _thread_args(ln)
+    ln.add_argument("--clear", action="store_true", help="replace the lists instead of merging")
     sub.add_parser("list")
     un = sub.add_parser("unpublish")
     un.add_argument("--slug", required=True)
@@ -289,10 +374,12 @@ def main() -> int:
     idp.add_argument("--set", metavar="ID", help="update this idea instead of listing")
     idp.add_argument("--status", help="new | planned | building | done | declined")
     idp.add_argument("--note", help="a sentence shown under the idea on the site")
+    idp.add_argument("--link", help="site path of the result, e.g. /library/<slug>")
     idp.add_argument("--json", action="store_true")
     a = p.parse_args()
     commands = {
         "publish-report": lambda: publish(a),
+        "link": lambda: link(a),
         "list": list_library,
         "unpublish": lambda: unpublish(a),
         "status": status,

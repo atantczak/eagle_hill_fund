@@ -104,3 +104,26 @@ def confirm(cond: pd.Series, n: int) -> pd.Series:
         return cond.fillna(False).astype(bool)
     c = cond.fillna(False).astype(float)
     return c.rolling(n).sum() >= n
+
+
+def enter_exit_gate(enter: pd.Series, exit_: pd.Series, *, start: float = 0.0) -> pd.Series:
+    """A 1/0 state driven by two conditions: ``enter`` switches it on, ``exit_`` off.
+
+    When both fire on the same bar the exit wins (the conservative read). The state
+    starts at ``start`` and NaN bars (warm-up) read 0 without disturbing it, like
+    ``hysteresis_gate``. Used by the leverage rules: "up 20% from the low" enters,
+    "down 20% from the high" exits.
+    """
+    e = enter.to_numpy(dtype=float)
+    x = exit_.to_numpy(dtype=float)
+    out = np.zeros(len(e))
+    state = float(start)
+    for i in range(len(e)):
+        if np.isnan(e[i]) or np.isnan(x[i]):
+            continue
+        if x[i] > 0:
+            state = 0.0
+        elif e[i] > 0:
+            state = 1.0
+        out[i] = state
+    return pd.Series(out, index=enter.index)

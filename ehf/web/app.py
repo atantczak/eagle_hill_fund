@@ -6,7 +6,8 @@ Routes (the load balancer enforces a Cognito login on every path except
     GET /                          home
     GET /healthz                   ALB health check
     GET /library                   write-ups + recent daily reports
-    GET /library/{slug}            one write-up (summary, body, embedded PDF)
+    GET /library/{slug}            one write-up (summary, body, embedded PDF, the backtests
+                                   behind it and the idea that prompted it; ADR-0011)
     GET /library/{slug}/file/{name}
     GET /daily                     daily reports by date
     GET /daily/{date}              the stored report.html, as-is
@@ -161,12 +162,57 @@ def create_app(
     def library_index(request: Request) -> HTMLResponse:
         return page(request, "library.html", posts=lib.posts(), daily=lib.daily(limit=7))
 
+    lab_data: dict[str, Any] = {}  # filled below once the lab mounts
+    boxes: dict[str, Any] = {}
+
+    def thread_for(post: Post) -> dict[str, Any]:
+        """What a write-up is built on: its runs (with headline numbers when the lab is
+        up), every scorecard of its study, and the ideas that prompted it."""
+        data = lab_data.get("data")
+        runs: list[dict[str, Any]] = []
+        studies: list[dict[str, Any]] = []
+        if data is not None:
+            try:
+                metrics = data.run_metrics([r.hash for r in post.runs])
+                for r in post.runs:
+                    runs.append({"hash": r.hash, "label": r.label, **metrics.get(r.hash, {})})
+                if post.study:
+                    studies = [s for s in data.studies() if s.get("study") == post.study]
+            except Exception:
+                log.exception("post %s: could not read the lab", post.slug)
+                runs = [{"hash": r.hash, "label": r.label} for r in post.runs]
+        else:
+            runs = [{"hash": r.hash, "label": r.label} for r in post.runs]
+        ideas = []
+        box = boxes.get("ideas")
+        for iid in post.ideas:
+            idea = None
+            if box is not None:
+                try:
+                    idea = box.get(iid)
+                except Exception:
+                    idea = None
+            ideas.append(
+                {
+                    "id": iid,
+                    "title": idea.title if idea else iid,
+                    "author": idea.author if idea else "",
+                }
+            )
+        return {"runs": runs, "studies": studies, "ideas": ideas, "lab": data is not None}
+
     @app.get("/library/{slug}", response_class=HTMLResponse)
     def library_post(request: Request, slug: str) -> HTMLResponse:
         post = lib.post(slug)
         if post is None:
             raise HTTPException(404, "no such write-up")
-        return page(request, "post.html", post=post, body_html=render_body(post.body_md))
+        return page(
+            request,
+            "post.html",
+            post=post,
+            body_html=render_body(post.body_md),
+            thread=thread_for(post),
+        )
 
     @app.get("/library/{slug}/file/{name}")
     def library_file(slug: str, name: str, download: bool = False) -> Response:
@@ -232,6 +278,11 @@ def create_app(
             {"email": user.email, "name": user.name} if user else {"email": None, "name": None}
         )
 
+    from ehf.web.ideas import IdeaBox, mount_ideas
+
+    box = ideas if ideas is not None else IdeaBox(lib.s3, lib.bucket, prefix=cfg.ideas_prefix)
+    boxes["ideas"] = box
+
     if with_lab:
         from ehf.web.lab.routes import default_components, mount_lab
 
@@ -243,16 +294,16 @@ def create_app(
             log.exception("lab disabled: could not build its components")
             templates.env.globals["lab"] = False
         else:
-            mount_lab(app, page, data=data, playground=playground, charts=charts)
+            mount_lab(
+                app, page, data=data, playground=playground, charts=charts, library=lib, ideas=box
+            )
+            lab_data["data"] = data
             from ehf.web.playbook import Playbook, mount_playbook
 
             if data.provider is not None:
                 mount_playbook(app, page, Playbook(data.provider, data))
                 templates.env.globals["playbook"] = True
 
-    from ehf.web.ideas import IdeaBox, mount_ideas
-
-    box = ideas if ideas is not None else IdeaBox(lib.s3, lib.bucket, prefix=cfg.ideas_prefix)
     mount_ideas(app, page, box)
     return app
 

@@ -12,7 +12,47 @@
   {% endfor %}
   {% if post.pdf %}<a class="btn quiet" href="/library/{{ post.slug }}/file/{{ post.pdf.name }}?download=1">Download</a>{% endif %}
 </div>
+{% if thread and thread.ideas %}
+<p class="small muted prompted">Prompted by {% for i in thread.ideas %}<a href="/ideas#{{ i.id }}">{{ i.title }}</a>{% if i.author %} ({{ i.author }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %} in the <a href="/ideas">ideas box</a>.</p>
+{% endif %}
 {% if body_html %}<div class="body">{{ body_html | safe }}</div>{% endif %}
+{% if thread and (thread.runs or thread.studies) %}
+<h2>The backtests behind this write-up</h2>
+<p class="small muted">Every number in the report traces to a stored run. Click one to see it charted in the lab{% if not thread.lab %} (the lab is not mounted here, so only the links are shown){% endif %}.</p>
+{% if thread.runs %}
+<div class="grid runs">
+  {% for r in thread.runs %}
+  <a class="card link run-card" href="/lab/run/{{ r.hash }}">
+    <div class="meta">{{ r.hash }}{% if r.strategy %} · {{ r.strategy }}{% endif %}{% if r.start %} · {{ r.start }} → {{ r.end }}{% endif %}</div>
+    <h3>{{ r.label or r.strategy or r.hash }}</h3>
+    {% if r.metrics %}<div class="kpis tight">
+      <div class="kpi"><div class="l">CAGR</div><div class="v {{ 'pos' if (r.metrics.cagr or 0) > 0 else 'neg' }}">{{ '%.1f%%'|format(r.metrics.cagr*100) if r.metrics.cagr is not none else '–' }}</div></div>
+      <div class="kpi"><div class="l">Sharpe</div><div class="v">{{ '%.2f'|format(r.metrics.sharpe) if r.metrics.sharpe is not none else '–' }}</div></div>
+      <div class="kpi"><div class="l">Max DD</div><div class="v neg">{{ '%.0f%%'|format(r.metrics.max_drawdown*100) if r.metrics.max_drawdown is not none else '–' }}</div></div>
+    </div>{% endif %}
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+{% if thread.studies %}
+<p class="small muted" style="margin-top:14px">Every walk-forward run of the <span class="mono">{{ post.study }}</span> study ({{ thread.studies|length }}):</p>
+<div class="table"><table class="data">
+<thead><tr><th>Strategy</th>{% if thread.studies[0].pair %}<th>Pair</th><th>History</th>{% endif %}<th>Verdict</th><th class="num">Sharpe</th><th class="num">CAGR</th><th class="num">Max DD</th><th>Span</th></tr></thead>
+<tbody>
+{% for s in thread.studies %}
+<tr class="link" data-href="/lab/run/{{ s.stitched_hash }}" onclick="location.href=this.dataset.href">
+  <td><b>{{ s.strategy }}</b></td>
+  {% if thread.studies[0].pair %}<td class="mono">{{ s.pair or '' }}</td><td class="small muted">{{ 'extended' if s.extended else 'the fund only' }}</td>{% endif %}
+  <td>{% if s.verdict == 'pass' %}<span class="pill pass">pass</span>{% elif s.verdict %}<span class="pill fail">{{ s.verdict }}</span>{% else %}<span class="pill neutral">—</span>{% endif %}</td>
+  <td class="num">{{ '%.2f'|format(s.metrics.get('sharpe')) if s.metrics.get('sharpe') is not none else '–' }}</td>
+  <td class="num {{ 'pos' if (s.metrics.get('cagr') or 0) > 0 else 'neg' }}">{{ '%.1f%%'|format(s.metrics.get('cagr')*100) if s.metrics.get('cagr') is not none else '–' }}</td>
+  <td class="num neg">{{ '%.0f%%'|format(s.metrics.get('max_drawdown')*100) if s.metrics.get('max_drawdown') is not none else '–' }}</td>
+  <td class="mono small">{{ s.start }} → {{ s.end }}</td>
+</tr>
+{% endfor %}
+</tbody></table></div>
+{% endif %}
+{% endif %}
 {% if post.pdf %}
 <h2>Read it here</h2>
 <iframe class="frame" src="/library/{{ post.slug }}/file/{{ post.pdf.name }}" title="{{ post.title }}"></iframe>

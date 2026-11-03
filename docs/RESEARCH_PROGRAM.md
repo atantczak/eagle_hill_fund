@@ -69,6 +69,12 @@ Universe `etf_asset_classes` / `etf_sectors` / `etf_core` (static, versioned).
 7. **VIX overlay dial on SPY** (`studies/vix_overlay`): nine fear-gauge rules +
    their vote as in/half/out dials vs. `CASH` (bill accrual), judged against hold
    and the 200-day filter on drawdown as much as Sharpe. Weekly on the Studio.
+8. **Leveraged fund when the market turns bullish** (`studies/leverage`, from
+   Dad's idea): six "the market turned" rules switching between a 3x/2x fund and
+   its plain fund (QQQ/TQQQ and seven look-alikes), with an event study of what
+   the 3x fund did over the week to two years after each call, and the fund's
+   history extended back to 1999 with a synthetic rebuild (`data/leverage`).
+   Monthly on the Studio.
 
 ### Tier B — Liquid US single names (bias mitigated)
 Universe `sp500` (true point-in-time) first, `us_liquid` (current, warned) second.
@@ -110,6 +116,7 @@ hourly; see `data/refresh.py`.
 | 02:00 | `refresh_data` | universes snapshot + daily bars current |
 | 02:30 (next) | `research_batch` | pop N theses → walk-forward → gauntlet → scorecards |
 | Sun 04:00 | `vix_study` | the VIX overlay study: 12 dials × walk-forward → gauntlet → scorecards + summary |
+| 1st 04:30 | `leverage_study` | the leverage study: 8 pairs × 7 rules × walk-forward → gauntlet → event study → scorecards + summary |
 | 06:30 (AWS) | daily market report | screens + narrative, emailed |
 | Sat 03:00 | `refresh_hourly` | hourly bars for `etf_core` |
 
@@ -184,3 +191,33 @@ small cells per hour, or 1,000–1,500 full-universe cells per hour.
   PBO 0.69, DSR 0, bull-only). Lesson: daily vol-targeting rebalances every bar
   (~5,800 trades/yr on 23 ETFs); the first backlog item is a rebalance-frequency /
   threshold overlay, then dual momentum. Scorecard: `var/scorecards/wf_tsmom_d07fbfca.md`.
+
+## 7. From an idea to a page (the precedent, ADR-0011)
+
+Every research question that gets tested leaves the same trail, so a reader can
+start at the idea, the write-up, or any single backtest and reach the other two.
+
+1. **The idea** lands in the ideas box (`/ideas`, or `python infra/aws/site/ops.py
+   ideas`). Mark it `planned` with a one-line note about what will be tested.
+2. **The study.** Dataset loader if the question needs one (`research/data/`),
+   thin strategies (`research/strategies/`), any question-specific analysis
+   (`research/analysis/`), the study module (`research/studies/<key>.py`: strategies
+   × grids × dataset → walk-forward → gauntlet → scorecards → one summary), the job
+   (`research/jobs/<key>_study.py`) and its row in `infra/studio/jobs.py`. Tests
+   for all of it on synthetic data. Every scorecard carries `study=<key>`.
+3. **Run it** (`python -m ehf.research.jobs.<key>_study`, `--quick` first). The
+   summary is `var/scorecards/<key>_<objective>_<stamp>.{md,json}`.
+4. **The write-up.** `scripts/build_<key>_report.py OUT.pdf IMG_DIR [STAMP]`
+   builds the PDF from the summary and the registry only, in the explainer
+   register: a "short version" box up front, every term explained, an honest
+   "what it will not do" section, a glossary, methodology in an appendix. A short
+   markdown body (the short version plus what to click) goes on the page above
+   the PDF.
+5. **Publish and thread.** `ops.py publish-report --slug <slug> ... --study <key>
+   --run <hash>=<label> ... --idea <id>`, then `python -m
+   ehf.research.jobs.sync_var` so the deployed lab has the runs, then `ops.py
+   ideas --set <id> --status done --note "..." --link /library/<slug>`.
+6. **Site changes**, if any, go to `main` to deploy.
+
+The write-up then shows its runs and the idea; each run page shows the write-up;
+the Studies table shows the study and its write-up; the idea shows "Read the result".

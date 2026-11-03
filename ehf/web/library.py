@@ -2,9 +2,16 @@
 
 Layout in the reports bucket::
 
-    library/<slug>/meta.json          slug, title, date, summary, tags, body_md, files[]
+    library/<slug>/meta.json          slug, title, date, summary, tags, body_md, files[],
+                                      runs[] (the backtests behind it), study, ideas[] (ADR-0011)
     library/<slug>/<file>             the PDF (and anything else listed in meta.files)
     daily-report/YYYY/MM/DD/report.html, report.pdf, report.md, meta.json ...
+
+A write-up that came out of a backtest names the runs it is built on (``runs``:
+registry hashes with a label), the study they belong to (``study``: the key every
+scorecard of that study carries, ``vix_overlay``, ``leverage``) and the ideas-box
+entries that prompted it (``ideas``). The lab reads the same fields backwards:
+``posts_for_run`` and ``posts_for_study`` put the write-up on the run's page.
 
 ``parse_meta`` is pure; ``Library`` wraps a boto3 S3 client with a small TTL
 cache so a page view costs at most one listing per minute.
@@ -22,6 +29,9 @@ from typing import Any, Protocol
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,80}$")
 FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+HASH_RE = re.compile(r"^[0-9a-f]{16}$")  # a registry config hash
+STUDY_RE = re.compile(r"^[a-z0-9_]{1,40}$")
+IDEA_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
 
 CONTENT_TYPES = {
     ".pdf": "application/pdf",
@@ -50,6 +60,14 @@ class PostFile:
 
 
 @dataclass(frozen=True)
+class RunLink:
+    """One backtest behind a write-up: a registry hash and what to call it."""
+
+    hash: str
+    label: str = ""
+
+
+@dataclass(frozen=True)
 class Post:
     slug: str
     title: str
@@ -59,6 +77,12 @@ class Post:
     body_md: str = ""
     files: tuple[PostFile, ...] = ()
     author: str = ""
+    runs: tuple[RunLink, ...] = ()  # the backtests the write-up is built on
+    study: str = ""  # the study key its scorecards carry
+    ideas: tuple[str, ...] = ()  # ideas-box entries that prompted it
+
+    def links_run(self, config_hash: str) -> bool:
+        return any(r.hash == config_hash for r in self.runs)
 
     @property
     def primary(self) -> PostFile | None:
@@ -108,6 +132,23 @@ def parse_meta(raw: dict[str, Any]) -> Post:
             )
         )
     tags = tuple(str(t).strip().lower() for t in (raw.get("tags") or []) if str(t).strip())
+    runs = []
+    for r in raw.get("runs", []) or []:
+        if isinstance(r, str):
+            r = {"hash": r}
+        h = str(r.get("hash", "")).strip().lower()
+        if not HASH_RE.match(h):
+            raise ValueError(f"bad run hash {h!r}")
+        runs.append(RunLink(hash=h, label=str(r.get("label") or "").strip()))
+    study = str(raw.get("study", "") or "").strip().lower()
+    if study and not STUDY_RE.match(study):
+        raise ValueError(f"bad study key {study!r}")
+    ideas = []
+    for i in raw.get("ideas", []) or []:
+        iid = str(i).strip()
+        if not IDEA_RE.match(iid):
+            raise ValueError(f"bad idea id {iid!r}")
+        ideas.append(iid)
     return Post(
         slug=slug,
         title=title,
@@ -117,6 +158,9 @@ def parse_meta(raw: dict[str, Any]) -> Post:
         body_md=str(raw.get("body_md", "") or ""),
         files=tuple(files),
         author=str(raw.get("author", "") or ""),
+        runs=tuple(runs),
+        study=study,
+        ideas=tuple(ideas),
     )
 
 
@@ -223,6 +267,22 @@ class Library:
             return None
         for p in self.posts():
             if p.slug == slug:
+                return p
+        return None
+
+    def posts_for_run(self, config_hash: str) -> list[Post]:
+        """Write-ups that name this run directly."""
+        h = config_hash.strip().lower()
+        return [p for p in self.posts() if p.links_run(h)]
+
+    def posts_for_study(self, study: str) -> list[Post]:
+        """Write-ups about this study (any run of the study counts as theirs)."""
+        key = study.strip().lower()
+        return [p for p in self.posts() if key and p.study == key] if key else []
+
+    def post_for_idea(self, idea_id: str) -> Post | None:
+        for p in self.posts():
+            if idea_id in p.ideas:
                 return p
         return None
 

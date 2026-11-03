@@ -4,7 +4,8 @@ The catalog turns the strategy registry into something a form can render: every
 parameter with its default, type, and a sensible slider range (taken from the
 study grids where one exists, otherwise widened around the default). Dial
 strategies (one asset vs. cash, steered by the VIX family) get the VIX dataset
-assembled for *any* asset; portfolio strategies take a symbol list.
+assembled for *any* asset; leverage rules take a pair (the plain fund and its
+leveraged cousin, real or extended history); portfolio strategies take a symbol list.
 
 Results are cached by config hash, so dragging a slider back to a previous
 value is instant, and may optionally be logged to the registry like any other
@@ -26,6 +27,13 @@ import pandas as pd
 from ehf.research import strategies  # noqa: F401  (import registers strategies)
 from ehf.research.backtest.engine import run_backtest
 from ehf.research.config.spec import CostConfig, FillModel, RunSpec, UniverseSpec
+from ehf.research.data.leverage import (
+    DEFAULT_PAIR,
+    PAIRS,
+    load_pair_bars,
+    pair_universe,
+    select_symbols,
+)
 from ehf.research.data.provider import DataProvider
 from ehf.research.data.schema import Timeframe
 from ehf.research.data.universes import STATIC_UNIVERSES
@@ -33,15 +41,20 @@ from ehf.research.data.vix import CASH, INDEX_SYMBOLS, SKEW, load_vix_bars
 from ehf.research.results.registry import ExperimentRegistry
 from ehf.research.strategies.base import _REGISTRY, Strategy
 from ehf.research.strategies.dial import DialStrategy
-from ehf.research.strategies.vix_overlay import GRIDS
+from ehf.research.strategies.leverage import GRIDS as LEV_GRIDS
+from ehf.research.strategies.leverage import LeverageDial
+from ehf.research.strategies.vix_overlay import GRIDS as VIX_GRIDS
 from ehf.web.lab.data import benchmark_symbol, run_payload, spec_dict
 
-HIDDEN_PARAMS = {"vix", "vix3m", "vvix", "skew", "cash"}
+GRIDS = {**VIX_GRIDS, **LEV_GRIDS}
+HIDDEN_PARAMS = {"vix", "vix3m", "vvix", "skew", "cash", "base", "benchmark"}
 WARMUP_DAYS = 600  # calendar days of history before ``start`` for signal warm-up
 MAX_SYMBOLS = 40
 
 
 def _kind(cls: type[Strategy]) -> str:
+    if issubclass(cls, LeverageDial):
+        return "leverage"
     return "dial" if issubclass(cls, DialStrategy) else "portfolio"
 
 
@@ -109,8 +122,8 @@ def catalog() -> list[dict[str, Any]]:
         for name, default in cls.defaults.items():
             if name in HIDDEN_PARAMS:
                 continue
-            if kind == "dial" and name == "asset":
-                continue  # the asset is the universe input, not a slider
+            if kind in ("dial", "leverage") and name == "asset":
+                continue  # the asset (or the pair) is the universe input, not a slider
             params.append(param_spec(name, default, grid.get(name)))
         out.append(
             {
@@ -122,6 +135,14 @@ def catalog() -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def pair_presets() -> list[dict[str, Any]]:
+    """The leveraged pairs the leverage rules can run on."""
+    return [
+        {"key": p.key, "base": p.base, "lev": p.lev, "leverage": p.leverage, "name": p.name}
+        for p in PAIRS.values()
+    ]
 
 
 def universe_presets() -> list[dict[str, Any]]:
@@ -140,6 +161,8 @@ class PlayRequest:
     end: str
     asset: str = "SPY"
     symbols: tuple[str, ...] = ()
+    pair: str = DEFAULT_PAIR  # leverage rules: "QQQ/TQQQ"
+    extended: bool = True  # leverage rules: the .X series (synthetic history spliced in front)
     slippage_bps: float = 1.0
     fill_model: str = "next_open"
     initial_capital: float = 1_000_000.0
@@ -165,6 +188,9 @@ class PlayRequest:
             raise ValueError(f"at most {MAX_SYMBOLS} symbols")
         fill = str(body.get("fill_model") or "next_open")
         FillModel(fill)
+        pair = str(body.get("pair") or DEFAULT_PAIR).strip().upper()
+        if pair not in PAIRS:
+            raise ValueError(f"unknown pair {pair!r}; known: {', '.join(PAIRS)}")
         return cls(
             strategy=strategy,
             params=params,
@@ -172,6 +198,8 @@ class PlayRequest:
             end=end,
             asset=str(body.get("asset") or "SPY").strip().upper() or "SPY",
             symbols=symbols,
+            pair=pair,
+            extended=body.get("extended", True) not in (False, "false", "False", 0, "0", "off"),
             slippage_bps=float(body.get("slippage_bps", 1.0)),
             fill_model=fill,
             initial_capital=float(body.get("initial_capital", 1_000_000.0)),
@@ -225,6 +253,13 @@ class Playground:
         data_start = self._data_start(req.start)
         if kind == "dial":
             key: tuple[Any, ...] = ("vix", req.asset, data_start, req.end)
+        elif kind == "leverage":
+            key = (
+                "pair",
+                req.pair,
+                req.extended,
+                req.end,
+            )  # the whole history: the splice needs it
         else:
             if not req.symbols:
                 raise ValueError("this strategy needs a symbol list")
@@ -236,6 +271,10 @@ class Playground:
                 hit = load_vix_bars(
                     self.provider, data_start, req.end, asset=req.asset, offline_skew=True
                 )
+            elif kind == "leverage":
+                pair = PAIRS[req.pair]
+                bars, _ = load_pair_bars(self.provider, pair, "1998-01-01", req.end)
+                hit = select_symbols(bars, pair_universe(pair, extended=req.extended))
             else:
                 hit = self.provider.get_bars(list(req.symbols), data_start, req.end, Timeframe.DAY)
             with self._lock:
@@ -252,6 +291,15 @@ class Playground:
         params = dict(req.params)
         if kind == "dial":
             params["asset"] = req.asset
+        elif kind == "leverage":
+            pair = PAIRS[req.pair]
+            params.update(
+                asset=pair.extended if req.extended else pair.lev,
+                base=pair.base,
+                benchmark=pair.base,
+            )
+            if "leverage" in _REGISTRY[req.strategy].defaults:
+                params.setdefault("leverage", pair.leverage)
         return RunSpec(
             strategy=req.strategy,
             params=params,
@@ -278,7 +326,8 @@ class Playground:
 
         res = run_backtest(spec, bars)
         sd = spec_dict(spec)
-        asset = req.asset if _kind(_REGISTRY[req.strategy]) == "dial" else symbols[0]
+        kind = _kind(_REGISTRY[req.strategy])
+        asset = str(spec.params["asset"]) if kind in ("dial", "leverage") else symbols[0]
         asset_bars = bars.loc[bars["symbol"] == asset].reset_index(drop=True)
         payload = run_payload(
             spec=sd,

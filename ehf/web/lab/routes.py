@@ -7,7 +7,7 @@ GET  /lab/chart?symbol=AAPL      any ticker with the fear-gauge dial on top
 
 GET  /lab/api/studies
 GET  /lab/api/runs?strategy=&standalone=&sweep_id=&sort=&limit=
-GET  /lab/api/run/{hash}
+GET  /lab/api/run/{hash}             ... plus ``writeups``: the library posts behind it (ADR-0011)
 GET  /lab/api/catalog
 POST /lab/api/play               {strategy, params, start, end, asset|symbols, ...}
 GET  /lab/api/bars/{symbol}?start=&end=&refresh=1&sma=50,200&ema=21&bb=20,2&rsi=14
@@ -27,11 +27,60 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from ehf.web.config import SiteConfig
 from ehf.web.lab.charts import Charts, parse_indicators
 from ehf.web.lab.data import LabData
-from ehf.web.lab.playground import Playground, PlayRequest, catalog, universe_presets
+from ehf.web.lab.playground import Playground, PlayRequest, catalog, pair_presets, universe_presets
 
 log = logging.getLogger(__name__)
 
 Page = Callable[..., HTMLResponse]
+
+
+def writeups_for(
+    library: Any, config_hash: str, study: str, ideas: Any = None
+) -> list[dict[str, Any]]:
+    """The write-ups behind a run: those naming it directly, then those about its study.
+    Each carries the ideas that prompted it, resolved to titles when the box is at hand."""
+    if library is None:
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    try:
+        direct = library.posts_for_run(config_hash)
+        via_study = library.posts_for_study(study) if study else []
+    except Exception:  # the library is S3; a hiccup there must not break the run page
+        log.exception("lab: could not read the library for run %s", config_hash)
+        return []
+    for post, how in [(p, "run") for p in direct] + [(p, "study") for p in via_study]:
+        if post.slug in seen:
+            continue
+        seen.add(post.slug)
+        label = next((r.label for r in post.runs if r.hash == config_hash and r.label), "")
+        prompted = []
+        for iid in post.ideas:
+            idea = None
+            if ideas is not None:
+                try:
+                    idea = ideas.get(iid)
+                except Exception:
+                    idea = None
+            prompted.append(
+                {
+                    "id": iid,
+                    "title": idea.title if idea else iid,
+                    "author": idea.author if idea else "",
+                }
+            )
+        out.append(
+            {
+                "slug": post.slug,
+                "title": post.title,
+                "date": post.date.isoformat(),
+                "summary": post.summary,
+                "how": how,
+                "label": label,
+                "ideas": prompted,
+            }
+        )
+    return out
 
 
 def default_components(cfg: SiteConfig | None = None) -> tuple[LabData, Playground, Charts]:
@@ -62,8 +111,26 @@ def mount_lab(
     data: LabData,
     playground: Playground,
     charts: Charts,
+    library: Any = None,
+    ideas: Any = None,
 ) -> None:
+    """``library`` (``ehf.web.library.Library``) and ``ideas`` (``IdeaBox``) are optional: with
+    them, a run page shows the write-up built on it and the idea that prompted it."""
     r = APIRouter(prefix="/lab")
+
+    def study_writeups() -> dict[str, list[dict[str, str]]]:
+        """study key -> the posts about it (for the Studies table)."""
+        if library is None:
+            return {}
+        out: dict[str, list[dict[str, str]]] = {}
+        try:
+            for key in data.study_keys():
+                posts = library.posts_for_study(key)
+                if posts:
+                    out[key] = [{"slug": p.slug, "title": p.title} for p in posts]
+        except Exception:
+            log.exception("lab: could not read the library")
+        return out
 
     # -- pages -------------------------------------------------------------------------
 
@@ -75,6 +142,7 @@ def mount_lab(
             request,
             "lab/index.html",
             studies=studies,
+            study_writeups=study_writeups(),
             strategies=data.strategies(),
             runs=data.runs(limit=100),
         )
@@ -92,6 +160,7 @@ def mount_lab(
             "lab/play.html",
             catalog=catalog(),
             presets=universe_presets(),
+            pairs=pair_presets(),
             today=date.today().isoformat(),
         )
 
@@ -129,15 +198,22 @@ def mount_lab(
     @r.get("/api/run/{config_hash}")
     def api_run(config_hash: str) -> JSONResponse:
         try:
-            return JSONResponse(data.run(config_hash))
+            payload = data.run(config_hash)
         except KeyError:
             raise HTTPException(404, "no such run") from None
         except FileNotFoundError:
             raise HTTPException(404, "run arrays are missing on disk") from None
+        study = (payload.get("study") or {}).get("study") or ""
+        if not study:  # a full-sample run of a study is not the stitched one its card names
+            study = next((s.study for s in data.scorecards() if config_hash in s.hashes), "")
+        payload["writeups"] = writeups_for(library, config_hash, study, ideas)
+        return JSONResponse(payload)
 
     @r.get("/api/catalog")
     def api_catalog() -> JSONResponse:
-        return JSONResponse({"strategies": catalog(), "presets": universe_presets()})
+        return JSONResponse(
+            {"strategies": catalog(), "presets": universe_presets(), "pairs": pair_presets()}
+        )
 
     @r.post("/api/play")
     async def api_play(request: Request) -> JSONResponse:

@@ -28,6 +28,7 @@
     <div class="meta small muted"><span class="tag">{{ i.kind_label }}</span> {{ i.author }} · {{ i.created }}</div>
     {% if i.details %}<p class="details">{{ i.details }}</p>{% endif %}
     {% if i.note %}<div class="notice small"><b>Andrew:</b> {{ i.note }}</div>{% endif %}
+    {% if i.link %}<p class="small" style="margin:8px 0 0"><a class="btn sm" href="{{ i.link }}">Read the result →</a></p>{% endif %}
   </article>
 {% endfor %}
 </div>

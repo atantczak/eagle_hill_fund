@@ -4,7 +4,9 @@ Ideas are JSON files in the reports bucket under ``ideas/<id>.json`` (no databas
 no third service). The site lists them and takes new ones; Andrew moves them
 through ``new -> planned -> building -> done`` (or ``declined``) with
 ``python infra/aws/site/ops.py ideas --set <id> --status planned --note "..."``,
-and reads the queue the same way when planning with Claude.
+and reads the queue the same way when planning with Claude. When an idea turns into
+a write-up, ``--link /library/<slug>`` puts "Read the result" under it, and the
+write-up's ``meta.json`` names the idea back (ADR-0011).
 
     GET  /ideas            the list + the form
     POST /ideas            submit one (plain HTML form, no JavaScript needed)
@@ -58,6 +60,7 @@ class Idea:
     status: str = "new"
     note: str = ""
     updated_at: str = ""
+    link: str = ""  # where the result lives on the site once there is one (/library/<slug>)
 
     @property
     def kind_label(self) -> str:
@@ -154,14 +157,23 @@ class IdeaBox:
         self._write(idea)
         return idea
 
-    def set_status(self, idea_id: str, status: str, note: str | None = None) -> Idea:
+    def set_status(
+        self, idea_id: str, status: str, note: str | None = None, link: str | None = None
+    ) -> Idea:
+        """Move an idea along; ``link`` is the site path of its result (a write-up, a run)."""
         if status not in STATUSES:
             raise ValueError(f"status must be one of {', '.join(STATUSES)}")
+        if link is not None and link and not link.startswith("/"):
+            raise ValueError("link must be a site path, e.g. /library/<slug>")
         idea = self.get(idea_id)
         if idea is None:
             raise KeyError(idea_id)
         updated = replace(
-            idea, status=status, note=idea.note if note is None else note.strip(), updated_at=_now()
+            idea,
+            status=status,
+            note=idea.note if note is None else note.strip(),
+            link=idea.link if link is None else link.strip(),
+            updated_at=_now(),
         )
         self._write(updated)
         return updated

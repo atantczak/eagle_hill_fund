@@ -7,4 +7,5 @@ whatever question-specific metrics matter, and writes one summary. Jobs in
 ``research.jobs`` only parse arguments and call these.
 
   vix_overlay   the nine VIX rules + vote vs. hold and the 200-day filter on SPY
+  leverage      the 3x fund when the market turns bullish vs. the plain fund (8 pairs)
 """

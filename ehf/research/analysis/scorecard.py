@@ -101,8 +101,14 @@ def write_scorecard(
     extra: dict[str, Any] | None = None,
     notes: str = "",
     out_dir: Path = SCORECARD_DIR,
+    study: str | None = None,
+    facts: dict[str, Any] | None = None,
 ) -> tuple[Path, Path]:
-    """Write ``<wf_id>.md`` + ``<wf_id>.json`` and return both paths."""
+    """Write ``<wf_id>.md`` + ``<wf_id>.json`` and return both paths.
+
+    ``study`` names the study this card belongs to (``vix_overlay``, ``leverage``)
+    so the site can tie the run to the study's write-up; ``facts`` is anything
+    question-specific the card should carry (an event table, a dataset fit)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     md = render_markdown(wf, verdict, title=title, extra=extra, notes=notes)
     payload = {
@@ -118,6 +124,8 @@ def write_scorecard(
         "verdict": verdict.as_dict(),
         "extra": extra or {},
         "notes": notes,
+        "study": study,
+        "facts": facts or {},
     }
     md_path = out_dir / f"{wf.wf_id}.md"
     json_path = out_dir / f"{wf.wf_id}.json"
