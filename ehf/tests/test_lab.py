@@ -424,6 +424,36 @@ def test_intraday_payload_is_the_latest_session(bars: pd.DataFrame, monkeypatch:
     assert prov.calls > calls
 
 
+def test_parse_indicators() -> None:
+    from ehf.web.lab.charts import indicator_key, max_window, parse_indicators
+
+    d = parse_indicators()
+    assert d["sma"] == (50, 200) and d["ema"] == () and d["bb"] is None and d["rsi"] is None
+    e = parse_indicators(sma="20, 50;200", ema="21", bb="20,2.5", rsi="14")
+    assert e["sma"] == (20, 50, 200) and e["ema"] == (21,)
+    assert e["bb"] == {"window": 20, "n_std": 2.5} and e["rsi"] == {"window": 14}
+    assert indicator_key(e) == "20,50,200|21|20,2.5|14" and max_window(e) == 200
+    assert parse_indicators(sma="")["sma"] == ()  # blank turns the default lines off
+    assert parse_indicators(bb="20")["bb"]["n_std"] == 2.0
+    for bad in ({"sma": "x"}, {"sma": "1"}, {"sma": "600"}, {"sma": "2,3,4,5,6"}, {"bb": "20,9"}):
+        with pytest.raises(ValueError):
+            parse_indicators(**bad)
+
+
+def test_bars_api_indicators(client: TestClient) -> None:
+    base = "/lab/api/bars/BBB?start=2020-01-01&end=2021-12-31"
+    d = client.get(base).json()
+    assert set(d["overlays"]) == {"sma50", "sma200"} and d["indicators"]["sma"] == [50, 200]
+    assert d["overlays"]["sma200"][0]["time"] == d["candles"][0]["time"]  # warm on day one
+    e = client.get(f"{base}&sma=20&ema=21&bb=20,2&rsi=14").json()
+    assert set(e["overlays"]) == {"sma20", "ema21", "bb", "rsi"}
+    assert e["overlays"]["bb"]["upper"][0]["value"] > e["overlays"]["bb"]["lower"][0]["value"]
+    assert all(0 <= x["value"] <= 100 for x in e["overlays"]["rsi"]["values"])
+    assert e["overlays"]["rsi"]["values"][0]["time"] == e["candles"][0]["time"]
+    assert client.get(f"{base}&sma=nope").status_code == 400
+    assert client.get(f"{base}&sma=").json()["overlays"] == {}
+
+
 def test_intraday_api(client: TestClient) -> None:
     # the default fixture provider has no minute bars -> a clear 404, not a crash
     r = client.get("/lab/api/intraday/BBB")

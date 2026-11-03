@@ -10,7 +10,7 @@ GET  /lab/api/runs?strategy=&standalone=&sweep_id=&sort=&limit=
 GET  /lab/api/run/{hash}
 GET  /lab/api/catalog
 POST /lab/api/play               {strategy, params, start, end, asset|symbols, ...}
-GET  /lab/api/bars/{symbol}?start=&end=&refresh=1   (refresh: pull the latest bars now)
+GET  /lab/api/bars/{symbol}?start=&end=&refresh=1&sma=50,200&ema=21&bb=20,2&rsi=14
 GET  /lab/api/intraday/{symbol}?refresh=1          the latest session, minute by minute
 """
 
@@ -25,7 +25,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from ehf.web.config import SiteConfig
-from ehf.web.lab.charts import Charts
+from ehf.web.lab.charts import Charts, parse_indicators
 from ehf.web.lab.data import LabData
 from ehf.web.lab.playground import Playground, PlayRequest, catalog, universe_presets
 
@@ -159,11 +159,19 @@ def mount_lab(
 
     @r.get("/api/bars/{symbol}")
     def api_bars(
-        symbol: str, start: str = "2015-01-01", end: str | None = None, refresh: bool = False
+        symbol: str,
+        start: str = "2015-01-01",
+        end: str | None = None,
+        refresh: bool = False,
+        sma: str | None = None,
+        ema: str | None = None,
+        bb: str | None = None,
+        rsi: str | None = None,
     ) -> JSONResponse:
         end = end or date.today().isoformat()
         try:
-            return JSONResponse(charts.symbol(symbol, start, end, refresh=refresh))
+            ind = parse_indicators(sma=sma, ema=ema, bb=bb, rsi=rsi)
+            return JSONResponse(charts.symbol(symbol, start, end, refresh=refresh, indicators=ind))
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
         except LookupError as exc:
