@@ -60,7 +60,25 @@ Terraform change to the task definition (env, roles) -> `terraform apply`, then 
 workflow so the service moves to the new revision (the service ignores task-definition drift
 so that GitHub-registered revisions are not reverted by Terraform).
 
-Local run: `EHF_REPORTS_BUCKET=ehf-market-reports-286016340145 uvicorn ehf.web.app:app --reload`
+## Running it locally (with the lab)
+
+The lab (`/lab`: every stored backtest charted, the playground, any-ticker
+charts) mounts only where the research platform imports — your machine, not the
+container. From the repo root:
+
+```bash
+set -a && . ./.env && set +a
+EHF_LAB=on EHF_RESULTS_BACKEND=local EHF_REPORTS_BUCKET=ehf-market-reports-286016340145 \
+  .venv311/bin/uvicorn ehf.web.app:app --port 8080 --reload
+open http://localhost:8080/lab
+```
+
+`EHF_LAB` is `auto` by default (on when `ehf.research` imports, off otherwise),
+`on` to insist, `off` to hide it. The playground reads the price cache under
+`var/cache` and the results store under `var/results`; a run on a new ticker
+fetches its history from FMP once. Nothing is written unless you tick *log*.
+Light/dark follows the system; the toggle in the nav remembers your choice, and
+`?theme=light` works on any link. See ADR-0008.
 (with the `.env` AWS keys exported). Without the ALB in front there is no login and `/me` is empty.
 
 ## Costs

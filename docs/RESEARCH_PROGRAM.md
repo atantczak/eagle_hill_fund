@@ -139,6 +139,10 @@ small cells per hour, or 1,000–1,500 full-universe cells per hour.
 
 ## 7. Status log
 
+* **2026-11-03** — The lab (`/lab`, ADR-0008): every stored run and study charted
+  (equity vs. hold, drawdown, exposure, trades on price, windows), a playground that runs
+  the engine from sliders on any ticker, and any-symbol charts with the vote dial. Local
+  first; light/dark theme across the site.
 * **2026-11-03** — Repo flattened (ADR-0007): `ehf/{research,web,integrations,tools,tests}`,
   `docs/ notebooks/ scripts/ var/` at the root; `server/`, `client/` and the dead
   integrations deleted. Site login now enforced on every path (ALB default action).

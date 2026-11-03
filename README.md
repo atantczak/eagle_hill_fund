@@ -13,7 +13,8 @@ docs, infra, or generated output.
 ```
 ehf/
   research/      THE QUANT PLATFORM: data → signals → strategies → backtest → results → analysis
-  web/           eaglehillfund.com: FastAPI over the reports bucket (daily reports + research library)
+  web/           eaglehillfund.com: FastAPI over the reports bucket, plus the lab (web/lab: backtest
+                 browser, playground, any-ticker charts — mounts locally, not in the container)
   integrations/  Financial Modeling Prep client that research/data wraps (legacy, kept on purpose)
   tools/         legacy utilities the FMP client depends on (parallelization, HTTP client)
   tests/         unit + property tests (no network)
@@ -43,6 +44,7 @@ the top-to-bottom map; everything else hangs off it.
 | [`docs/COMPLEXITY.md`](docs/COMPLEXITY.md) | Complexity measures & their acceptance gauntlet |
 | [eaglehillfund.com/library](https://eaglehillfund.com/library) | The research library (login). Write-ups are PDFs built by `scripts/build_*.py` into `var/reports/` and published with `python infra/aws/site/ops.py publish-report ...`; never committed. Current: *The Fear Gauge and the Market* (explainer) and *The Fear Gauge, Put to the Test* (results). |
 | [`infra/README.md`](infra/README.md) | Where things run: AWS (daily report) and the Studio (research jobs) |
+| [`infra/aws/site/README.md`](infra/aws/site/README.md) | The site and the lab: run it locally with `uvicorn ehf.web.app:app`, open `/lab` |
 | [`docs/REPO_AUDIT.md`](docs/REPO_AUDIT.md) | Original audit of the legacy code (point-in-time) |
 | [`docs/adr/`](docs/adr) | Architecture Decision Records; 0007 is the current layout |
 
