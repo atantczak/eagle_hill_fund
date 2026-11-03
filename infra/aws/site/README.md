@@ -55,6 +55,7 @@ python infra/aws/site/ops.py publish-report --slug x --title "..." --date 2026-1
     --summary "..." --file var/reports/X.pdf --tags vix --body-md notes.md
 python infra/aws/site/ops.py list
 python infra/aws/site/ops.py user --email dad@example.com --name "Dad"   # and add to terraform.tfvars
+python infra/aws/site/ops.py password --email dad@example.com            # hand out a temporary password
 python infra/aws/site/ops.py logs --minutes 30
 python infra/aws/site/ops.py ideas                                         # the ideas box, newest first
 python infra/aws/site/ops.py ideas --set 20261103-170102-ab12cd --status planned --note "After the QQQ study."
