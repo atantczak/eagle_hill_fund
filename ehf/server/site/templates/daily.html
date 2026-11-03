@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Daily report · {{ org }}{% endblock %}
+{% block content %}
+<div class="eyebrow">Daily market report</div>
+<h1>Every morning, 6:30 ET</h1>
+<p class="lede">Screens, unusual moves, fundamentals, the market dial and one idea to chew on. Each day is stored as it was sent.</p>
+{% if not daily %}<p class="muted">No reports in the bucket yet.</p>{% endif %}
+<ul class="plain">
+{% for r in daily %}
+  <li><a href="/daily/{{ r.date.isoformat() }}">{{ r.date.strftime('%A, %B %-d, %Y') }}</a>
+    <span class="small muted">
+    {% if 'report.pdf' in r.files %} · <a href="/daily/{{ r.date.isoformat() }}/report.pdf">PDF</a>{% endif %}
+    {% if 'report.md' in r.files %} · <a href="/daily/{{ r.date.isoformat() }}/report.md">Markdown</a>{% endif %}
+    </span></li>
+{% endfor %}
+</ul>
+{% endblock %}

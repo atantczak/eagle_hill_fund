@@ -28,6 +28,9 @@ dev = ["pytest>=8", "ruff>=0.4", "mypy>=1.9", "pandas-stubs", "types-requests", 
 rds = ["psycopg[binary]>=3.1", "boto3>=1.34"]
 # Daily market report job (ehf.server.research.reporting): narrative + PDF + AWS delivery.
 report = ["anthropic>=0.60", "reportlab>=4.2", "boto3>=1.34"]
+# eaglehillfund.com (ehf.server.site): FastAPI over the reports bucket. The container
+# pins the same packages in infra/aws/site/requirements.txt.
+site = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "jinja2>=3.1", "markdown>=3.6", "boto3>=1.34", "httpx>=0.27"]
 
 # One package: `ehf`. The quant platform lives in `ehf.server.research`; the
 # legacy FMP/AWS tooling it wraps lives in `ehf.server.{integrations,tools}`.
@@ -52,9 +55,13 @@ ignore = ["PD008", "PD010"]
 
 [tool.mypy]
 python_version = "3.11"
-files = ["ehf/server/research"]
+files = ["ehf/server/research", "ehf/server/site"]
 strict = true
 # The legacy server tooling is untyped code we only touch at the data adapter.
+[[tool.mypy.overrides]]
+module = ["boto3", "boto3.*", "botocore.*"]
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = ["ehf.server.integrations.*", "ehf.server.tools.*", "ehf.client.*"]
 ignore_missing_imports = true

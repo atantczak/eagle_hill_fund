@@ -21,3 +21,8 @@ infra/aws/terraform/.terraform/
 infra/aws/terraform/*.tfstate*
 infra/aws/terraform/*tfplan*
 infra/studio/launchd/
+
+# site stack terraform local files
+infra/aws/site/terraform/.terraform/
+infra/aws/site/terraform/*.tfstate*
+infra/aws/site/terraform/*tfplan*

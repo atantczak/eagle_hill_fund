@@ -38,8 +38,7 @@ the top-to-bottom map; everything else hangs off it.
 | [`docs/ARCHITECTURE.md`](ehf/server/docs/ARCHITECTURE.md) | The full walkthrough — read this first |
 | [`docs/RESEARCH_PROGRAM.md`](ehf/server/docs/RESEARCH_PROGRAM.md) | **The standing research programme**: agenda, kill criteria, nightly loop, conventions |
 | [`docs/COMPLEXITY.md`](ehf/server/docs/COMPLEXITY.md) | Complexity measures & their acceptance gauntlet |
-| [`docs/reports/VIX_SPY_Explainer.pdf`](ehf/server/docs/reports/VIX_SPY_Explainer.pdf) | Plain-English guide to the VIX overlay (the fear gauge as an in/out dial); regenerate with `scripts/build_vix_explainer.py` |
-| [`docs/reports/VIX_SPY_Backtest_Results.pdf`](ehf/server/docs/reports/VIX_SPY_Backtest_Results.pdf) | Results of the VIX overlay walk-forward study in the same plain-English style; regenerate with `scripts/build_vix_results_report.py OUT.pdf IMG_DIR [STAMP]` after `jobs/vix_study` |
+| [eaglehillfund.com/library](https://eaglehillfund.com/library) | The research library (login). Write-ups are PDFs built by `ehf/server/scripts/build_*.py` into `ehf/server/var/reports/` and published with `python infra/aws/site/ops.py publish-report ...`; never committed. Current: *The Fear Gauge and the Market* (explainer) and *The Fear Gauge, Put to the Test* (results). |
 | [`infra/README.md`](infra/README.md) | Where things run: AWS (daily report) and the Studio (research jobs) |
 | [`docs/REPO_AUDIT.md`](ehf/server/docs/REPO_AUDIT.md) | Original audit of the legacy code (point-in-time) |
 | [`docs/adr/`](ehf/server/docs/adr) | Architecture Decision Records (package layout, results storage, engine build-vs-buy) |

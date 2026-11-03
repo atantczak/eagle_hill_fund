@@ -1,0 +1,89 @@
+# Build the site image, push it to ECR and roll the ECS service.
+# Auth: OIDC -> arn:aws:iam::286016340145:role/ehf-site-deploy (infra/aws/site/terraform/github.tf).
+name: site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ehf/server/site/**"
+      - "infra/aws/site/Dockerfile"
+      - "infra/aws/site/requirements.txt"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: site-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ROLE_ARN: arn:aws:iam::286016340145:role/ehf-site-deploy
+  ECR_REPOSITORY: ehf-site
+  ECS_CLUSTER: ehf-site
+  ECS_SERVICE: ehf-site
+  TASK_FAMILY: ehf-site
+  CONTAINER_NAME: web
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r infra/aws/site/requirements.txt pytest httpx
+      - run: python -m pytest ehf/server/tests/test_site.py -q --noconftest -p no:cacheprovider
+        env:
+          PYTHONPATH: .
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE="$REGISTRY/$ECR_REPOSITORY:${GITHUB_SHA::12}"
+          docker build -f infra/aws/site/Dockerfile -t "$IMAGE" -t "$REGISTRY/$ECR_REPOSITORY:latest" .
+          docker push "$IMAGE"
+          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch the current task definition
+        run: |
+          aws ecs describe-task-definition --task-definition "$TASK_FAMILY" --query taskDefinition \
+            | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)' \
+            > task-definition.json
+
+      - id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build.outputs.image }}
+
+      - uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+          wait-for-minutes: 10

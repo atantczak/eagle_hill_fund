@@ -9,6 +9,8 @@ infra/
     terraform/      Lambda + EventBridge Scheduler + S3 + Secrets Manager + SES + SNS alarm
     build_lambda.sh builds infra/aws/build/lambda.zip (manylinux aarch64 wheels + ehf subset)
     ops.py          set-secrets / rotate-signer-key / invoke / logs / latest  (boto3, reads .env)
+    site/           eaglehillfund.com — ECS Fargate + ALB + Cognito + Route 53 (own Terraform state)
+      terraform/    the stack;  Dockerfile + requirements.txt  the image;  ops.py  publish-report / status / logs
   studio/     what runs on the Mac Studio — research jobs on the 28-core / 96 GB box
     jobs.py         THE job table -> launchd agents: render / install / uninstall / status / run
     launchd/        rendered plists (git-ignored; regenerated from jobs.py)
@@ -17,6 +19,7 @@ infra/
 | Target | Why there | Scheduler | Logs |
 |---|---|---|---|
 | **AWS** (`aws/`) | small, must run even if the Studio is off, emails you | EventBridge Scheduler (cron, America/New_York) | CloudWatch `/aws/lambda/ehf-daily-report` |
+| **AWS site** (`aws/site/`) | the research library at eaglehillfund.com, behind a login | GitHub Actions deploys on push to `main` | CloudWatch `/ecs/ehf-site` |
 | **Studio** (`studio/`) | CPU-heavy research: sweeps, walk-forward, full-universe refresh | launchd user agents (`com.eaglehill.*`) | `ehf/server/var/log/<job>.log` + `<job>.launchd.log` |
 
 Rules of thumb:

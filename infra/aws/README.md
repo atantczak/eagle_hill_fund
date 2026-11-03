@@ -3,6 +3,9 @@
 Everything the daily market report needs in AWS, as Terraform, built and deployed
 from this laptop with no Docker. Account `286016340145`, region `us-east-1`.
 
+The website (`site/`) is a second, independent stack in the same account: see
+[`site/README.md`](site/README.md).
+
 ```
 infra/aws/
   terraform/        Lambda + EventBridge Scheduler + S3 + Secrets Manager + SES + SNS alarm

@@ -139,8 +139,9 @@ small cells per hour, or 1,000–1,500 full-universe cells per hour.
 
 ## 7. Status log
 
-* **2026-11-03** — Results write-up `docs/reports/VIX_SPY_Backtest_Results.pdf`
-  (`scripts/build_vix_results_report.py`, reads `var/scorecards` + `var/results`,
+* **2026-11-03** — Results write-up *The Fear Gauge, Put to the Test* (published to the site
+  library, https://eaglehillfund.com/library/vix-backtest-results; built by
+  `scripts/build_vix_results_report.py` from `var/scorecards` + `var/results`,
   13 pages, same plain-English register as the explainer). Findings that only
   showed up with the equity curves in hand: `vix_term` was *out* for the whole
   Aug-2008..Jun-2009 window (0% DD there, but invested only 25% of 2009, which is

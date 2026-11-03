@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ post.title }} · {{ org }}{% endblock %}
+{% block content %}
+<div class="eyebrow"><a href="/library">Library</a></div>
+<h1>{{ post.title }}</h1>
+<div class="meta">{{ post.date.strftime('%B %-d, %Y') }}{% if post.author %} · {{ post.author }}{% endif %}
+  {% for t in post.tags %}<span class="tag">{{ t }}</span>{% endfor %}</div>
+{% if post.summary %}<p class="lede">{{ post.summary }}</p>{% endif %}
+<div class="actions">
+  {% for f in post.files %}
+  <a class="btn{% if not f.primary %} quiet{% endif %}" href="/library/{{ post.slug }}/file/{{ f.name }}">{{ f.label }}</a>
+  {% endfor %}
+  {% if post.pdf %}<a class="btn quiet" href="/library/{{ post.slug }}/file/{{ post.pdf.name }}?download=1">Download</a>{% endif %}
+</div>
+{% if body_html %}<div class="body">{{ body_html | safe }}</div>{% endif %}
+{% if post.pdf %}
+<h2>Read it here</h2>
+<iframe class="frame" src="/library/{{ post.slug }}/file/{{ post.pdf.name }}" title="{{ post.title }}"></iframe>
+{% endif %}
+{% endblock %}

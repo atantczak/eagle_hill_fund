@@ -227,9 +227,10 @@ dial in [0, 1] produced from the VIX family (`data/vix.py` builds the dataset;
 rules + a vote, plus `dial_hold` and `dial_sma` (200-day filter) as the honest
 benchmarks. Because the rules are pure signal functions, the daily report computes
 the same dial live (`reporting/market.dial_context`). The plain-English version is
-`docs/reports/VIX_SPY_Explainer.pdf` and its results twin `VIX_SPY_Backtest_Results.pdf`
-(built from the scorecards and stored equity curves by `scripts/build_vix_results_report.py`);
-the study is `studies/vix_overlay.py`.
+the two write-ups in the site library (https://eaglehillfund.com/library): the explainer
+(`scripts/build_vix_explainer.py`) and the results report (`scripts/build_vix_results_report.py`,
+from the scorecards and stored equity curves). PDFs are published with
+`infra/aws/site/ops.py publish-report`, never committed (ADR-0006); the study is `studies/vix_overlay.py`.
 
 Sizing (`sizing.py`: `normalize_weights`, `vol_target`) and exits (`exits.py`:
 `hold_until_target`) are **shared, pluggable components** — picked from a menu,
