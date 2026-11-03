@@ -42,6 +42,18 @@ data "aws_s3_bucket" "reports" {
   bucket = var.reports_bucket != "" ? var.reports_bucket : "ehf-market-reports-${data.aws_caller_identity.current.account_id}"
 }
 
+# The results bucket (also the Terraform state bucket) holds the Studio's var/
+# under var_prefix; the lab mirrors it. Not managed by any stack.
+data "aws_s3_bucket" "var" {
+  bucket = var.var_bucket != "" ? var.var_bucket : "ehf-results-${data.aws_caller_identity.current.account_id}"
+}
+
+# The FMP key lives in the daily-report stack's secret; the lab fetches bars it
+# has never seen with it.
+data "aws_secretsmanager_secret" "fmp" {
+  name = "ehf/fmp"
+}
+
 locals {
   account_id     = data.aws_caller_identity.current.account_id
   cognito_domain = "${aws_cognito_user_pool_domain.site.domain}.auth.${data.aws_region.current.region}.amazoncognito.com"

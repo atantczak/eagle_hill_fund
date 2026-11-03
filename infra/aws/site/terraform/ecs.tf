@@ -59,7 +59,7 @@ data "aws_iam_policy_document" "ecs_tasks_assume" {
   }
 }
 
-# Pulls the image and ships logs. Nothing else.
+# Pulls the image, ships logs, and injects the FMP key at launch. Nothing else.
 resource "aws_iam_role" "execution" {
   name               = "${var.name}-execution"
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
@@ -70,7 +70,22 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# What the running container may do: read the reports bucket. Nothing else.
+data "aws_iam_policy_document" "execution_secrets" {
+  statement {
+    sid       = "ReadFmpKey"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [data.aws_secretsmanager_secret.fmp.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "execution_secrets" {
+  name   = "${var.name}-execution-secrets"
+  role   = aws_iam_role.execution.id
+  policy = data.aws_iam_policy_document.execution_secrets.json
+}
+
+# What the running container may do: read the reports bucket, and read (plus
+# write back bars it fetched) the var/ prefix of the results bucket. Nothing else.
 resource "aws_iam_role" "task" {
   name               = "${var.name}-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
@@ -86,6 +101,21 @@ data "aws_iam_policy_document" "task" {
     sid       = "ReadReports"
     actions   = ["s3:GetObject"]
     resources = ["${data.aws_s3_bucket.reports.arn}/*"]
+  }
+  statement {
+    sid       = "ListVar"
+    actions   = ["s3:ListBucket"]
+    resources = [data.aws_s3_bucket.var.arn]
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["${var.var_prefix}/*"]
+    }
+  }
+  statement {
+    sid       = "MirrorVar"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["${data.aws_s3_bucket.var.arn}/${var.var_prefix}/*"]
   }
 }
 
@@ -109,6 +139,12 @@ resource "aws_ecs_task_definition" "site" {
     cpu_architecture        = "X86_64"
   }
 
+  # Task-scoped scratch disk (part of the free 20 GiB of ephemeral storage): the
+  # lab mirrors var/ into it. Gone when the task stops; refilled from S3.
+  volume {
+    name = "var"
+  }
+
   container_definitions = jsonencode([{
     name      = "web"
     image     = "${aws_ecr_repository.site.repository_url}:bootstrap" # replaced by the deploy workflow
@@ -124,7 +160,21 @@ resource "aws_ecs_task_definition" "site" {
       { name = "EHF_COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.alb.id },
       { name = "AWS_REGION", value = var.region },
       { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
+      # The lab (ehf.web.lab) over a read-only S3 mirror of the Studio's var/.
+      { name = "EHF_LAB", value = "on" },
+      { name = "EHF_VAR_DIR", value = "/var/ehf" },
+      { name = "EHF_VAR_S3_BUCKET", value = data.aws_s3_bucket.var.id },
+      { name = "EHF_VAR_S3_PREFIX", value = var.var_prefix },
+      { name = "EHF_RESULTS_BACKEND", value = "local" },
     ]
+    secrets = [
+      { name = "FMP_API_KEY", valueFrom = data.aws_secretsmanager_secret.fmp.arn },
+    ]
+    mountPoints = [{
+      sourceVolume  = "var"
+      containerPath = "/var/ehf"
+      readOnly      = false
+    }]
     readonlyRootFilesystem = true
     linuxParameters        = { initProcessEnabled = true }
     logConfiguration = {

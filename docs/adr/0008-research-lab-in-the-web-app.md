@@ -1,6 +1,6 @@
 # ADR-0008 — The research lab lives in the web app, local first
 
-- **Status:** Accepted
+- **Status:** Accepted (the "local first" paragraph is amended by ADR-0009)
 - **Date:** 2026-11-03
 
 ## Context
@@ -35,7 +35,8 @@ the same FastAPI app, behind the same Cognito login when deployed:
 container, whose Dockerfile copies ``ehf/web`` alone. The playground needs the
 price cache and the results store on local disk; shipping them to ECS (cache in
 S3, read-only store snapshot, a bigger image) is a separate decision for when
-the local version has earned it.
+the local version has earned it. *(Done the same day: ADR-0009 — the container
+mirrors the Studio's ``var/`` from S3, read-only.)*
 
 ## Consequences
 

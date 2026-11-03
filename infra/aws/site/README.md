@@ -1,16 +1,18 @@
 # infra/aws/site — eaglehillfund.com
 
 The research library behind a login: write-ups published from `var/reports/`
-and the daily market report, read straight from the reports bucket. One small
-container on ECS Fargate behind an application load balancer that enforces a
-Cognito sign-in. Terraform state `terraform/site.tfstate` (separate from the
-daily-report stack). ADR-0006 has the reasoning.
+and the daily market report, read straight from the reports bucket; and the lab
+(`/lab`), which reads a mirror of the Studio's `var/` from the results bucket.
+One container on ECS Fargate behind an application load balancer that enforces
+a Cognito sign-in. Terraform state `terraform/site.tfstate` (separate from the
+daily-report stack). ADR-0006 (the site) and ADR-0009 (the lab in it) have the
+reasoning.
 
 ```
 infra/aws/site/
   terraform/        VPC (2 public subnets, no NAT) + ALB + ACM + Route 53 + Cognito + ECR + ECS + GitHub OIDC role
-  Dockerfile        python:3.11-slim, installs requirements.txt, copies only ehf/web
-  requirements.txt  the five runtime packages, pinned (mirror of the `site` extra in pyproject)
+  Dockerfile        python:3.11-slim, installs requirements.txt, copies ehf/ (tests excluded by .dockerignore)
+  requirements.txt  site packages + the research packages the lab needs, pinned
   ops.py            publish-report / list / unpublish / status / logs / user   (boto3, reads .env)
 .github/workflows/site.yml   test -> build -> push to ECR -> roll the ECS service (push to main, or manual)
 ehf/web/             the FastAPI app (routes in app.py, S3 access in library.py, templates/)
@@ -26,8 +28,9 @@ ehf/web/             the FastAPI app (routes in app.py, S3 access in library.py,
 | ALB + listeners | `ehf-site` | 80 -> 443 redirect; www -> apex; every path requires a Cognito login except `/healthz` |
 | Cognito user pool + hosted domain + app client | `ehf-site` | invite-only accounts from `terraform.tfvars`, optional authenticator-app MFA, 7-day ALB sessions |
 | ECR repository | `ehf-site` | images tagged by git SHA, last 10 kept, scanned on push |
-| ECS cluster / task definition / service | `ehf-site` | 0.25 vCPU, 512 MiB, read-only root filesystem, circuit breaker with rollback |
-| IAM roles | `ehf-site-execution`, `ehf-site-task`, `ehf-site-deploy` | pull + logs; read the reports bucket; GitHub Actions deploys via OIDC from `main`/`dev` |
+| ECS cluster / task definition / service | `ehf-site` | 0.5 vCPU, 2 GiB, read-only root filesystem plus a scratch volume at `/var/ehf` for the mirrored `var/`, circuit breaker with rollback |
+| IAM roles | `ehf-site-execution`, `ehf-site-task`, `ehf-site-deploy` | pull + logs + the `ehf/fmp` secret; read the reports bucket, read/write `var/*` in the results bucket; GitHub Actions deploys via OIDC from `main`/`dev` |
+| S3 gateway endpoint | `ehf-site-s3` | free; the mirror's S3 traffic stays inside AWS |
 | CloudWatch log group | `/ecs/ehf-site` | container stdout, 60 days |
 
 ## First deploy
@@ -55,16 +58,33 @@ python infra/aws/site/ops.py user --email dad@example.com --name "Dad"   # and a
 python infra/aws/site/ops.py logs --minutes 30
 ```
 
-Code change under `ehf/web/` -> merge to `main` -> the workflow deploys (about 3 minutes).
+Code change under `ehf/` -> merge to `main` -> the workflow deploys (about 3 minutes).
 Terraform change to the task definition (env, roles) -> `terraform apply`, then re-run the
 workflow so the service moves to the new revision (the service ignores task-definition drift
 so that GitHub-registered revisions are not reverted by Terraform).
 
+## The lab on the site
+
+The container has no `var/`. The Studio copies it up every night
+(`python -m ehf.research.jobs.sync_var`, in the launchd table) and the container
+mirrors `s3://ehf-results-<account>/var/` into `/var/ehf` on demand: database,
+scorecards and Cboe cache at startup, daily bars in the background, a run's
+arrays or a new symbol on first touch, a re-check once an hour. The site never
+logs playground runs (the "log" box is hidden); the Studio is the writer. Env
+on the task: `EHF_LAB=on`, `EHF_VAR_DIR`, `EHF_VAR_S3_BUCKET`, `EHF_VAR_S3_PREFIX`,
+`EHF_RESULTS_BACKEND=local`, and `FMP_API_KEY` from the `ehf/fmp` secret.
+ADR-0009.
+
+```bash
+python -m ehf.research.jobs.sync_var --dry-run     # what the next nightly sync would upload
+python -m ehf.research.jobs.sync_var               # push it now (e.g. after a study)
+```
+
 ## Running it locally (with the lab)
 
 The lab (`/lab`: every stored backtest charted, the playground, any-ticker
-charts) mounts only where the research platform imports — your machine, not the
-container. From the repo root:
+charts) mounts wherever the research platform imports: straight over `var/`
+on your machine, over the S3 mirror in the container. From the repo root:
 
 ```bash
 set -a && . ./.env && set +a
@@ -83,5 +103,7 @@ Light/dark follows the system; the toggle in the nav remembers your choice, and
 
 ## Costs
 
-ALB ≈ $17/month, Fargate 0.25 vCPU ≈ $9, Route 53 $0.50, ECR/logs pennies, Cognito free at
-this size. No NAT gateway by design. Roughly $27/month.
+ALB ≈ $17/month, Fargate 0.5 vCPU / 2 GiB ≈ $21, Route 53 $0.50, the mirrored `var/` in S3
+≈ $0.02, ECR/logs pennies, Cognito free at this size. No NAT gateway by design. Roughly
+$39/month (the lab added about $12; `cpu = 256` in `variables.tf` gives back $7 at the cost
+of slower playground runs).

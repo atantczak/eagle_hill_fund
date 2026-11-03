@@ -20,7 +20,7 @@ infra/aws/
 | Lambda (py3.11, arm64, 3 GB, 15 min) | `ehf-daily-report` | runs `ehf.research.reporting.lambda_handler` |
 | EventBridge Scheduler | `ehf-daily-report` | `cron(30 6 ? * MON-FRI *)` America/New_York |
 | S3 bucket | `ehf-market-reports-<acct>` | `daily-report/YYYY/MM/DD/*` + `daily-report/latest/*` + the Lambda zips |
-| Secrets Manager | `ehf/fmp`, `ehf/anthropic`, `ehf/report-signer` | API keys and the signer's access key; values set by `ops.py`, never by Terraform |
+| Secrets Manager | `ehf/fmp`, `ehf/anthropic`, `ehf/report-signer` | API keys and the signer's access key; values set by `ops.py`, never by Terraform (`ehf/fmp` is also read by the site task for the lab) |
 | IAM user | `ehf-daily-report-signer` | read-only on the reports prefix; its key presigns the 7-day links in the email |
 | SES identity | your address | sender = recipient (SES sandbox) |
 | SNS topic + CloudWatch alarm | `ehf-daily-report-alarms` | emails you if the Lambda errors |

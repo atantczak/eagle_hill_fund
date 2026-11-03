@@ -123,6 +123,12 @@ JOBS: tuple[Job, ...] = (
             "Weekly VIX overlay study: nine rules + vote vs hold / 200dma, walk-forward + gauntlet"
         ),
     ),
+    Job(
+        name="sync_var",
+        module="ehf.research.jobs.sync_var",
+        schedule=({"Hour": 6, "Minute": 0},),  # after the refresh (2:00) and Sunday's study
+        description="Copy var/ (results, scorecards, daily cache) up to S3 for the deployed lab",
+    ),
 )
 
 

@@ -313,6 +313,16 @@ def test_symbol_chart_falls_back_without_vix(client: TestClient) -> None:
     assert client.get("/lab/api/bars/bad%20name?start=2020-01-01&end=2021-01-01").status_code == 400
 
 
+def test_mirror_mode_hides_the_log_box(world: dict[str, Any]) -> None:
+    from ehf.web.library import Library
+
+    lib = Library(FakeS3({}), "b")
+    cfg = SiteConfig(lab="on", reports_bucket="b", var_bucket="ehf-results-x")
+    app = create_app(cfg, library=lib, lab=(world["data"], world["play"], world["charts"]))
+    html = TestClient(app).get("/lab/play").text
+    assert "f-log" not in html and "Nothing you do here is saved" in html
+
+
 def test_lab_off_hides_everything() -> None:
     from ehf.web.library import Library
 

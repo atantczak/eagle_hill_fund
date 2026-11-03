@@ -324,7 +324,7 @@ window.EHF = (function () {
     }
     function request() {
       const s = byKey[f.strategy.value];
-      const body = { strategy: s.key, params: readParams(), start: f.start.value, end: f.end.value, slippage_bps: Number(f.slip.value), fill_model: f.fill.value, log: f.log.checked };
+      const body = { strategy: s.key, params: readParams(), start: f.start.value, end: f.end.value, slippage_bps: Number(f.slip.value), fill_model: f.fill.value, log: !!(f.log && f.log.checked) };
       if (s.kind === 'dial') body.asset = ($('#f-asset').value || 'SPY').trim().toUpperCase(); else body.symbols = ($('#f-symbols').value || '').split(/[\s,]+/).filter(Boolean).map((x) => x.toUpperCase());
       return body;
     }

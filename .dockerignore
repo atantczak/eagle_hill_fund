@@ -1,0 +1,8 @@
+# Build context for infra/aws/site/Dockerfile (the repo root). Only ehf/ and the
+# site's requirements file are copied; keep the rest out of the upload.
+*
+!ehf
+!infra/aws/site/requirements.txt
+ehf/tests
+**/__pycache__
+**/*.pyc

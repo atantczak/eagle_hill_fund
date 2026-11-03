@@ -18,6 +18,10 @@ class SiteConfig:
     cache_ttl_s: float = 60.0
     org_name: str = "The Eagle Hill Fund"
     lab: str = "auto"  # "auto" (on when ehf.research imports), "on", "off"
+    # Deployed lab: mirror the Studio's var/ from s3://<var_bucket>/<var_prefix>/ into
+    # EHF_VAR_DIR on demand (ehf.web.lab.mirror). Empty = read var/ straight off disk.
+    var_bucket: str = ""
+    var_prefix: str = "var"
 
     @classmethod
     def from_env(cls) -> SiteConfig:
@@ -32,4 +36,6 @@ class SiteConfig:
             region=os.getenv("AWS_REGION", d.region),
             cache_ttl_s=float(os.getenv("EHF_SITE_CACHE_TTL", d.cache_ttl_s)),
             lab=os.getenv("EHF_LAB", d.lab).strip().lower(),
+            var_bucket=os.getenv("EHF_VAR_S3_BUCKET", d.var_bucket).strip(),
+            var_prefix=os.getenv("EHF_VAR_S3_PREFIX", d.var_prefix).strip("/"),
         )

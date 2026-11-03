@@ -6,9 +6,10 @@ on:
   push:
     branches: [main]
     paths:
-      - "ehf/web/**"
+      - "ehf/**"
       - "infra/aws/site/Dockerfile"
       - "infra/aws/site/requirements.txt"
+      - ".dockerignore"
       - ".github/workflows/site.yml"
   workflow_dispatch:
 
@@ -38,7 +39,9 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r infra/aws/site/requirements.txt pytest httpx
-      - run: python -m pytest ehf/tests/test_site.py -q --noconftest -p no:cacheprovider
+      # The site tests, the lab on synthetic data, and the S3 mirror on a fake bucket —
+      # with exactly the packages the image has, so a missing dependency fails here.
+      - run: python -m pytest ehf/tests/test_site.py ehf/tests/test_lab.py ehf/tests/test_mirror.py -q -p no:cacheprovider
         env:
           PYTHONPATH: .
 

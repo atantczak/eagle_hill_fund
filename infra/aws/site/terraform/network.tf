@@ -39,6 +39,16 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
+# Free gateway endpoint: the lab's S3 traffic (the mirrored var/ tree, hundreds
+# of megabytes on a cold start) stays inside AWS instead of going out the IGW.
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${var.region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [aws_route_table.public.id]
+  tags              = { Name = "${var.name}-s3" }
+}
+
 resource "aws_security_group" "alb" {
   name        = "${var.name}-alb"
   description = "Public HTTP/HTTPS to the site load balancer"

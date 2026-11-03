@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from ehf.web.config import SiteConfig
 from ehf.web.lab.charts import Charts
 from ehf.web.lab.data import LabData
 from ehf.web.lab.playground import Playground, PlayRequest, catalog, universe_presets
@@ -32,8 +33,16 @@ log = logging.getLogger(__name__)
 Page = Callable[..., HTMLResponse]
 
 
-def default_components() -> tuple[LabData, Playground, Charts]:
-    """The real thing: local store, local scorecards, FMP provider over the cache."""
+def default_components(cfg: SiteConfig | None = None) -> tuple[LabData, Playground, Charts]:
+    """The real thing: local store, local scorecards, FMP provider over the cache.
+
+    With ``cfg.var_bucket`` set (the container), the store and the cache are
+    read-only mirrors of that bucket's ``var/`` (``ehf.web.lab.mirror``)."""
+    if cfg is not None and cfg.var_bucket:
+        from ehf.web.lab.mirror import mirrored_components
+
+        return mirrored_components(bucket=cfg.var_bucket, prefix=cfg.var_prefix, region=cfg.region)
+
     from ehf.research.data.fmp_provider import FMPProvider
     from ehf.research.results.registry import ExperimentRegistry
     from ehf.research.results.store import LocalResultStore

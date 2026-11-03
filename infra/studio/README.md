@@ -25,6 +25,7 @@ python infra/studio/jobs.py uninstall
 | `refresh_data` | daily 02:00 | snapshot `etf_core`, `us_liquid`, `sp500`, `vix_family` membership to `var/universe/`; bring every member's daily bars up to the last completed session |
 | `refresh_hourly` | Sat 03:00 | hourly bars for the ETF set (intraday studies) |
 | `vix_study` | Sun 04:00 | the VIX overlay study (`studies/vix_overlay`): nine rules + vote vs hold / 200dma through walk-forward + gauntlet; scorecards to `var/scorecards/` |
+| `sync_var` | daily 06:00 | copy `var/` (results, scorecards, daily cache) up to S3 for the deployed lab (ADR-0009); one direction, never deletes |
 
 launchd re-fires a missed slot when the machine wakes, so a night asleep means a
 late run, not a lost one. Jobs take a lock (`var/run/<job>.lock`) so overlapping

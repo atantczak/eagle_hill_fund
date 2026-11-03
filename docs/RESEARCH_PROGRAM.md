@@ -139,6 +139,9 @@ small cells per hour, or 1,000–1,500 full-universe cells per hour.
 
 ## 7. Status log
 
+* **2026-11-03** — The lab is on eaglehillfund.com (ADR-0009): the Studio syncs `var/`
+  to S3 nightly (`sync_var`), the container mirrors it on demand into a scratch volume,
+  read-only (playground runs are not logged from the site). Task 0.5 vCPU / 2 GiB.
 * **2026-11-03** — The lab (`/lab`, ADR-0008): every stored run and study charted
   (equity vs. hold, drawdown, exposure, trades on price, windows), a playground that runs
   the engine from sliders on any ticker, and any-symbol charts with the vote dial. Local

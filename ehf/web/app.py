@@ -13,8 +13,8 @@ Routes (the load balancer enforces a Cognito login on every path except
     GET /daily/{date}/{name}       report.pdf / report.md / ...
     GET /logout                    expire the ALB session, bounce through Cognito's logout
     GET /me                        who the ALB says you are
-    /lab/...                       the research lab (ehf.web.lab) — only when the research
-                                   platform is importable, i.e. locally, never in the container
+    /lab/...                       the research lab (ehf.web.lab): on the Studio over var/,
+                                   in the container over a read-only S3 mirror of it (ADR-0009)
 """
 
 from __future__ import annotations
@@ -126,7 +126,12 @@ def create_app(
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
     with_lab = lab is not None or lab_available(cfg.lab)
     templates = Jinja2Templates(directory=str(TEMPLATES))
-    templates.env.globals.update(org=cfg.org_name, site_url=cfg.site_url, lab=with_lab)
+    templates.env.globals.update(
+        org=cfg.org_name,
+        site_url=cfg.site_url,
+        lab=with_lab,
+        lab_readonly=bool(cfg.var_bucket),  # the mirror never writes back: no "log" box
+    )
 
     def page(request: Request, name: str, **ctx: Any) -> HTMLResponse:
         user = user_from_headers(request.headers)
@@ -202,7 +207,7 @@ def create_app(
         from ehf.web.lab.routes import default_components, mount_lab
 
         try:
-            data, playground, charts = lab if lab is not None else default_components()
+            data, playground, charts = lab if lab is not None else default_components(cfg)
         except Exception:
             if cfg.lab == "on" or lab is not None:
                 raise

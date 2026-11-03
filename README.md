@@ -14,7 +14,7 @@ docs, infra, or generated output.
 ehf/
   research/      THE QUANT PLATFORM: data → signals → strategies → backtest → results → analysis
   web/           eaglehillfund.com: FastAPI over the reports bucket, plus the lab (web/lab: backtest
-                 browser, playground, any-ticker charts — mounts locally, not in the container)
+                 browser, playground, any-ticker charts — over var/ locally, over an S3 mirror of it deployed)
   integrations/  Financial Modeling Prep client that research/data wraps (legacy, kept on purpose)
   tools/         legacy utilities the FMP client depends on (parallelization, HTTP client)
   tests/         unit + property tests (no network)

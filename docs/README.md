@@ -25,6 +25,7 @@ things are the way they are (not living docs; they capture the decision at the t
 - [0006 — Reports library on the site](adr/0006-reports-library-on-the-site.md)
 - [0007 — Flat package layout](adr/0007-flat-package-layout.md)
 - [0008 — The research lab in the web app, local first](adr/0008-research-lab-in-the-web-app.md)
+- [0009 — The deployed lab reads a read-only S3 mirror of the Studio's var/](adr/0009-lab-deployed-over-an-s3-mirror.md)
 
 > **Note on paths:** the package was flattened on 2026-11-03 (ADR-0007): there is no
 > `ehf/server/` or `ehf/client/` any more, and `docs/`, `notebooks/`, `scripts/` and

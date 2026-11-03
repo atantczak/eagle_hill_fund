@@ -65,16 +65,28 @@ variable "vpc_cidr" {
   default = "10.20.0.0/16"
 }
 
+variable "var_bucket" {
+  description = "Bucket holding the Studio's var/ (results, scorecards, price cache) that the lab mirrors. Empty = ehf-results-<account>."
+  type        = string
+  default     = ""
+}
+
+variable "var_prefix" {
+  description = "Key prefix of var/ inside var_bucket (ehf.research.jobs.sync_var writes it, the container reads it)."
+  type        = string
+  default     = "var"
+}
+
 variable "cpu" {
-  description = "Fargate task CPU units (256 = 0.25 vCPU)."
+  description = "Fargate task CPU units (256 = 0.25 vCPU). The lab runs backtests on request; 512 keeps a playground run to a few seconds."
   type        = number
-  default     = 256
+  default     = 512
 }
 
 variable "memory" {
-  description = "Fargate task memory in MiB."
+  description = "Fargate task memory in MiB. The lab loads a universe of daily bars per playground run; 2048 is the floor for the big universes."
   type        = number
-  default     = 512
+  default     = 2048
 }
 
 variable "desired_count" {
