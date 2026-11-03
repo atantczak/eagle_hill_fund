@@ -34,7 +34,7 @@ from ehf.research.results.registry import ExperimentRegistry
 from ehf.research.strategies.base import _REGISTRY, Strategy
 from ehf.research.strategies.dial import DialStrategy
 from ehf.research.strategies.vix_overlay import GRIDS
-from ehf.web.lab.data import run_payload, spec_dict
+from ehf.web.lab.data import benchmark_symbol, run_payload, spec_dict
 
 HIDDEN_PARAMS = {"vix", "vix3m", "vvix", "skew", "cash"}
 WARMUP_DAYS = 600  # calendar days of history before ``start`` for signal warm-up
@@ -46,8 +46,9 @@ def _kind(cls: type[Strategy]) -> str:
 
 
 def _doc(cls: type[Strategy]) -> str:
-    doc = inspect.getdoc(cls) or ""
-    return doc.strip().splitlines()[0] if doc.strip() else cls.__name__
+    """First line of the strategy's own docstring (never the base class's)."""
+    doc = inspect.cleandoc(cls.__doc__) if "__doc__" in vars(cls) and cls.__doc__ else ""
+    return doc.splitlines()[0] if doc else cls.__name__
 
 
 def _nice_step(span: float) -> float:
@@ -276,14 +277,16 @@ class Playground:
             return cached
 
         res = run_backtest(spec, bars)
+        sd = spec_dict(spec)
         asset = req.asset if _kind(_REGISTRY[req.strategy]) == "dial" else symbols[0]
         asset_bars = bars.loc[bars["symbol"] == asset].reset_index(drop=True)
         payload = run_payload(
-            spec=spec_dict(spec),
+            spec=sd,
             metrics=res.metrics,
             equity=res.equity,
             trades=res.trades,
             asset_bars=asset_bars,
+            benchmark_bars=self.benchmark_bars(benchmark_symbol(sd), bars, req.start, req.end),
             meta={"hash": h, "logged": False, "source": "playground"},
         )
         if req.log and self.registry is not None:
@@ -294,6 +297,29 @@ class Playground:
             while len(self._results) > self._max_results:
                 self._results.popitem(last=False)
         return payload
+
+    def benchmark_bars(
+        self, symbol: str, bars: pd.DataFrame, start: str, end: str
+    ) -> pd.DataFrame | None:
+        """Bars for the buy-and-hold line: from the run's own bars when the symbol is
+        in the basket, otherwise a (cached) fetch; ``None`` when unavailable."""
+        own = bars.loc[bars["symbol"] == symbol]
+        if not own.empty:
+            return own.reset_index(drop=True)
+        key: tuple[Any, ...] = ("benchmark", symbol, start, end)
+        with self._lock:
+            hit = self._bars.get(key)
+        if hit is None:
+            try:
+                hit = self.provider.get_bars([symbol], start, end, Timeframe.DAY)
+            except Exception:
+                return None
+            with self._lock:
+                self._bars[key] = hit
+                while len(self._bars) > 8:
+                    self._bars.popitem(last=False)
+        out = hit.loc[hit["symbol"] == symbol].reset_index(drop=True)
+        return None if out.empty else out
 
     def _log(self, spec: RunSpec, bars: pd.DataFrame, payload: dict[str, Any]) -> None:
         assert self.registry is not None

@@ -22,7 +22,7 @@ from ehf.tests.test_site import FakeS3
 from ehf.web.app import create_app
 from ehf.web.config import SiteConfig
 from ehf.web.lab.charts import Charts
-from ehf.web.lab.data import LabData, held_weights, primary_asset, session_date
+from ehf.web.lab.data import LabData, benchmark_symbol, held_weights, primary_asset, session_date
 from ehf.web.lab.playground import Playground, catalog, param_spec
 
 SYMBOLS = ("AAA", "BBB", "CCC")
@@ -96,7 +96,7 @@ def _window(i: int, year: str, params: dict[str, Any], sharpe: float) -> dict[st
 
 @pytest.fixture(scope="module")
 def bars() -> pd.DataFrame:
-    return synthetic_bars(SYMBOLS, "2017-01-02", "2021-12-31")
+    return synthetic_bars((*SYMBOLS, "SPY"), "2017-01-02", "2021-12-31")
 
 
 @pytest.fixture
@@ -199,6 +199,11 @@ def test_primary_asset_prefers_dial_asset_then_first_real_symbol() -> None:
     assert primary_asset({"params": {}, "universe": {"symbols": ["^VIX", "CASH", "IWM"]}}) == "IWM"
 
 
+def test_benchmark_is_the_timed_asset_for_dials_and_spy_otherwise() -> None:
+    assert benchmark_symbol({"params": {"asset": "qqq"}}) == "QQQ"
+    assert benchmark_symbol({"params": {}, "universe": {"symbols": ["HRL", "GRMN"]}}) == "SPY"
+
+
 def test_param_spec_ranges() -> None:
     s = param_spec("window", 200, [100, 150, 200, 250])
     assert s["type"] == "int" and s["min"] >= 0 and s["max"] > 250 and s["step"] >= 1
@@ -214,6 +219,8 @@ def test_catalog_lists_registered_strategies() -> None:
     assert vote["kind"] == "dial"
     assert "asset" not in {p["name"] for p in vote["params"]}  # the asset is the universe input
     assert "vix" not in {p["name"] for p in vote["params"]}
+    boll = next(s for s in catalog() if s["key"] == "bollinger_reversion")
+    assert "Base class" not in boll["doc"]  # no inherited docstring
 
 
 # -- browser + run ------------------------------------------------------------------------
@@ -248,6 +255,7 @@ def test_run_payload(client: TestClient, world: dict[str, Any]) -> None:
     assert (
         p["asset"] == "AAA" and p["candles"] and p["candles"][0]["time"] == p["series"]["time"][0]
     )
+    assert p["benchmark"] == "SPY"  # not the first stock in the basket
     assert p["benchmark_metrics"]["cagr"] is not None
     assert p["windows"] and p["windows"][1]["params"] == {"lookback": 60}
     assert p["study"]["wf_id"] == "wf_tsmom_abcd1234"
@@ -273,6 +281,8 @@ def test_playground_runs_and_caches(client: TestClient, world: dict[str, Any]) -
     p = r.json()
     assert p["params"] == {"lookback": 90, "vol_window": 20}
     assert p["strategy"] == "tsmom" and p["logged"] is False and p["source"] == "playground"
+    assert p["benchmark"] == "SPY" and p["asset"] == "AAA"
+    assert len(p["series"]["benchmark"]) == len(p["series"]["time"])
     assert p["series"]["time"][0] >= "2019-01-01" and p["series"]["time"][-1] <= "2021-06-30"
     assert p["costs"]["slippage_bps"] == 2.0
     assert not world["store"].has_run(p["hash"])

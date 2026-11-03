@@ -2,9 +2,12 @@
 
 ``LabData`` wraps the local results store (SQLite + parquet) and the scorecard
 directory. ``run_payload`` turns a run — stored or just computed — into the JSON
-the browser draws: equity vs. buy-and-hold, drawdowns, exposure rebuilt from the
-trade ledger, candles of the primary asset with trade markers, yearly returns,
-and the walk-forward windows when the run is a stitched out-of-sample curve.
+the browser draws: equity vs. a buy-and-hold benchmark, drawdowns, exposure rebuilt
+from the trade ledger, candles of the primary asset with trade markers, yearly
+returns, and the walk-forward windows when the run is a stitched out-of-sample curve.
+
+The benchmark is deliberately not "the first symbol in the basket": a dial is
+judged against holding the asset it times, everything else against SPY.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from ehf.research.paths import SCORECARD_DIR
 from ehf.research.results.store import LocalResultStore
 
 SESSION_TZ = "America/New_York"
+BENCHMARK = "SPY"  # buy-and-hold comparison for every portfolio strategy
 MAX_MARKERS = 4000
 _FULL_RUN_RE = re.compile(r"run `([0-9a-f]{16})`")
 
@@ -106,6 +110,14 @@ def primary_asset(spec: dict[str, Any]) -> str:
     uni = spec.get("universe") or {}
     symbols = [s for s in (uni.get("symbols") or ()) if not str(s).startswith("^") and s != "CASH"]
     return str(symbols[0]).upper() if symbols else "SPY"
+
+
+def benchmark_symbol(spec: dict[str, Any]) -> str:
+    """What buy-and-hold to draw against: the timed asset for a dial, else SPY."""
+    params = spec.get("params") or {}
+    if isinstance(params.get("asset"), str):
+        return str(params["asset"]).upper()
+    return BENCHMARK
 
 
 def yearly_returns(net: pd.Series) -> pd.Series:
@@ -269,6 +281,7 @@ class LabData:
             equity=rec["equity"],
             trades=rec["trades"],
             asset_bars=self.asset_bars(primary_asset(spec), spec["start"], spec["end"]),
+            benchmark_bars=self.asset_bars(benchmark_symbol(spec), spec["start"], spec["end"]),
             windows=windows,
             meta={
                 "hash": config_hash,
@@ -307,7 +320,7 @@ class LabData:
 def benchmark_from_bars(
     bars: pd.DataFrame | None, index: pd.DatetimeIndex, initial_capital: float
 ) -> pd.Series | None:
-    """Buy-and-hold equity of the asset on the run's bars (close-to-close)."""
+    """Buy-and-hold equity of one symbol on the run's bars (close-to-close)."""
     if bars is None or bars.empty:
         return None
     close = bars.set_index("timestamp")["close"].sort_index()
@@ -326,9 +339,11 @@ def run_payload(
     equity: pd.DataFrame,
     trades: pd.DataFrame,
     asset_bars: pd.DataFrame | None,
+    benchmark_bars: pd.DataFrame | None = None,
     windows: list[dict[str, Any]] | None = None,
     meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """``asset_bars`` feed the candle chart; ``benchmark_bars`` the grey buy-and-hold line."""
     eq = equity.set_index("timestamp").sort_index()
     index = pd.DatetimeIndex(eq.index)
     if index.tz is None:
@@ -348,7 +363,7 @@ def run_payload(
     gross = held.abs().sum(axis=1) if not held.empty else pd.Series(0.0, index=index)
     asset_w = held[asset] if asset in held.columns else pd.Series(0.0, index=index)
 
-    bench = benchmark_from_bars(asset_bars, index, capital)
+    bench = benchmark_from_bars(benchmark_bars, index, capital)
     bench_net = bench.pct_change().fillna(0.0) if bench is not None else None
     bench_metrics: dict[str, Any] | None = None
     if bench is not None and bench_net is not None:
@@ -441,6 +456,7 @@ def run_payload(
         "costs": spec.get("costs") or {},
         "fill_model": spec.get("fill_model"),
         "asset": asset,
+        "benchmark": benchmark_symbol(spec) if bench is not None else None,
         "metrics": {k: _clean(v) for k, v in metrics.items()},
         "benchmark_metrics": bench_metrics,
         "series": {
