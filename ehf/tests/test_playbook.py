@@ -45,6 +45,20 @@ def provider() -> FakeProvider:
     return FakeProvider(bars)
 
 
+def test_refresh_rebuilds_after_a_minute(provider: FakeProvider, monkeypatch: Any) -> None:
+    pb = Playbook(provider, None, ttl_s=900)
+    clock = [5_000_000.0]
+    monkeypatch.setattr("ehf.web.playbook.time.time", lambda: clock[0])
+    builds = []
+    monkeypatch.setattr(pb, "build", lambda end: builds.append(end) or {"n": len(builds)})
+    assert pb.today(date(2023, 12, 29)) == {"n": 1}
+    assert pb.today(date(2023, 12, 29), refresh=True) == {"n": 1}  # within the minute
+    clock[0] += 61
+    assert pb.today(date(2023, 12, 29), refresh=True) == {"n": 2}
+    clock[0] += 61
+    assert pb.today(date(2023, 12, 29)) == {"n": 2}  # plain views honour the 15-minute cache
+
+
 def test_payload_shape(provider: FakeProvider, tmp_path: Any) -> None:
     from ehf.research.results.store import LocalResultStore
 
@@ -54,6 +68,7 @@ def test_payload_shape(provider: FakeProvider, tmp_path: Any) -> None:
     pb = Playbook(provider, data, ttl_s=60)
     p = pb.build(date(2023, 12, 29))
     assert p["as_of"] == "2023-12-29" and p["asset"] == "SPY"
+    assert p["built_at"].endswith("+00:00") and p["live"] == {}  # FakeProvider has no quotes
     assert p["combined"]["state"] in {"IN", "HALF", "OUT"}
     assert [r["key"] for r in p["rules"]] == [r.key for r in RULES]
     for r in p["rules"]:

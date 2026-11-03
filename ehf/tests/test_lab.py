@@ -323,6 +323,119 @@ def test_symbol_chart_falls_back_without_vix(client: TestClient) -> None:
     assert client.get("/lab/api/bars/bad%20name?start=2020-01-01&end=2021-01-01").status_code == 400
 
 
+class LiveProvider(FakeProvider):
+    """A provider that can also re-pull a tail and quote, like FMP."""
+
+    def __init__(self, bars: pd.DataFrame) -> None:
+        super().__init__(bars)
+        self.tails: list[list[str]] = []
+        self.quotes = 0
+
+    def refresh_tail(self, symbols: list[str], *, days: int = 10, **_: Any) -> pd.DataFrame:
+        self.tails.append(list(symbols))
+        return self.bars.iloc[0:0]
+
+    def intraday(self, symbol: str, **_: Any) -> pd.DataFrame:
+        """Two sessions of flat one-minute bars (the second one half done)."""
+        frames = []
+        for day, n in (("2021-12-30", 390), ("2021-12-31", 200)):
+            idx = pd.date_range(f"{day} 09:30", periods=n, freq="min", tz="America/New_York")
+            px = 100.0 if symbol != "^VIX" else 20.0
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "symbol": symbol,
+                        "timestamp": idx.tz_convert("UTC"),
+                        "open": px,
+                        "high": px + 1,
+                        "low": px - 1,
+                        "close": px + 0.5,
+                        "volume": 10.0,
+                    }
+                )
+            )
+        return pd.concat(frames, ignore_index=True)
+
+    def quote(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        self.quotes += 1
+        q = {"price": 101.5, "change_pct": 0.004, "time": "2021-12-31T20:59:50+00:00"}
+        return {s: dict(q) for s in symbols}
+
+
+def test_charts_freshen_tail_on_a_timer_and_on_demand(bars: pd.DataFrame, monkeypatch: Any) -> None:
+    prov = LiveProvider(bars)
+    ch = Charts(prov, tail_ttl_s=900, refresh_min_s=60)
+    clock = [1_000_000.0]
+    monkeypatch.setattr("ehf.web.lab.charts.time.time", lambda: clock[0])
+    d = ch.symbol("BBB", "2020-01-01", "2021-12-31")
+    assert prov.tails == [["BBB", "^VIX"]]  # first view pulls the tail
+    assert d["live"]["quote"]["price"] == 101.5 and d["live"]["bars_pulled_at"]
+    ch.symbol("BBB", "2020-01-01", "2021-12-31")
+    ch.symbol("BBB", "2020-01-01", "2021-12-31", refresh=True)  # too soon even when forced
+    assert len(prov.tails) == 1
+    clock[0] += 61
+    ch.symbol("BBB", "2020-01-01", "2021-12-31", refresh=True)  # forced, past the minimum
+    assert len(prov.tails) == 2
+    clock[0] += 300
+    ch.symbol("BBB", "2020-01-01", "2021-12-31")  # not due on the timer yet
+    assert len(prov.tails) == 2
+    clock[0] += 900
+    ch.symbol("BBB", "2020-01-01", "2021-12-31")  # due
+    assert len(prov.tails) == 3
+    assert prov.quotes == 6  # a quote on every view, never cached
+    assert Charts(FakeProvider(bars)).symbol("BBB", "2020-01-01", "2021-12-31")["live"] == {
+        "quote": None,
+        "bars_pulled_at": None,
+        "generated_at": ANY_ISO,
+    }
+
+
+class _AnyIso:
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, str) and other.endswith("+00:00")
+
+
+ANY_ISO = _AnyIso()
+
+
+def test_intraday_payload_is_the_latest_session(bars: pd.DataFrame, monkeypatch: Any) -> None:
+    prov = LiveProvider(bars)
+    ch = Charts(prov)
+    clock = [2_000_000.0]
+    monkeypatch.setattr("ehf.web.lab.charts.time.time", lambda: clock[0])
+    d = ch.intraday("BBB")
+    assert d["session"] == "2021-12-31" and d["interval"] == "1min"
+    assert len(d["candles"]) == 200 and len(d["vix"]) == 200
+    assert d["stats"]["bars"] == 200 and d["stats"]["last"] == 100.5
+    assert d["stats"]["last_time"].startswith("2021-12-31T12:49")
+    # chart times are Eastern wall-clock read as UTC: 09:30 ET -> 09:30 "UTC"
+    assert d["candles"][0]["time"] % 86400 == 9 * 3600 + 30 * 60
+    assert d["prev_close"] is not None and d["stats"]["change"] is not None
+    # BBB's daily close on 2021-12-30 is the prior close (synthetic bars have it)
+    prior = bars[(bars["symbol"] == "BBB") & (bars["timestamp"] < "2021-12-31")]["close"].iloc[-1]
+    assert d["prev_close"] == pytest.approx(float(prior))
+    assert d["live"]["quote"]["price"] == 101.5
+    calls = prov.calls
+    ch.intraday("BBB")  # served from the minute cache
+    ch.intraday("BBB", refresh=True)  # a forced refresh still waits 15 s
+    assert prov.calls == calls
+    clock[0] += 16
+    ch.intraday("BBB", refresh=True)
+    assert prov.calls > calls
+
+
+def test_intraday_api(client: TestClient) -> None:
+    # the default fixture provider has no minute bars -> a clear 404, not a crash
+    r = client.get("/lab/api/intraday/BBB")
+    assert r.status_code == 404 and "not available" in r.json()["detail"]
+    assert client.get("/lab/api/intraday/bad%20name").status_code == 400
+
+
+def test_bars_api_accepts_refresh(client: TestClient) -> None:
+    r = client.get("/lab/api/bars/BBB?start=2020-01-01&end=2021-12-31&refresh=1")
+    assert r.status_code == 200 and "live" in r.json()
+
+
 def test_mirror_mode_hides_the_log_box(world: dict[str, Any]) -> None:
     from ehf.web.library import Library
 

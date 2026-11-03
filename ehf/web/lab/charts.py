@@ -11,9 +11,11 @@ from __future__ import annotations
 import logging
 import math
 import threading
+import time
 from collections import OrderedDict
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -29,22 +31,210 @@ log = logging.getLogger(__name__)
 
 SMA_WINDOWS = (50, 200)
 WARMUP_DAYS = 400
+TAIL_TTL_S = 900.0  # re-pull the last days of bars at most this often per symbol
+REFRESH_MIN_S = 60.0  # ...and no more often than this even when someone hits Refresh
+TAIL_DAYS = 10
+INTRADAY_TTL_S = 60.0  # minute bars are ~1 min behind the tape; no point asking more often
+INTRADAY_MIN_S = 15.0  # ...but let Refresh pull a little sooner
+ET = ZoneInfo("America/New_York")
+
+
+def now_iso() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 class Charts:
-    def __init__(self, provider: DataProvider) -> None:
+    """Any-ticker chart payloads, cache-first, with a freshness guarantee.
+
+    The provider's bar cache counts a range as covered when it ends within a few
+    days of today, so a symbol looked at on Monday would still show Monday's close
+    on Thursday. ``symbol`` therefore re-pulls the tail (the last ``TAIL_DAYS``) at
+    most every ``TAIL_TTL_S`` per symbol, or on demand through ``refresh=True``
+    (throttled to ``REFRESH_MIN_S``), and attaches a live quote on every call.
+    """
+
+    def __init__(
+        self,
+        provider: DataProvider,
+        *,
+        tail_ttl_s: float = TAIL_TTL_S,
+        refresh_min_s: float = REFRESH_MIN_S,
+    ) -> None:
         self.provider = provider
+        self.tail_ttl_s = tail_ttl_s
+        self.refresh_min_s = refresh_min_s
         self._cache: OrderedDict[tuple[str, str, str], dict[str, Any]] = OrderedDict()
+        self._tail: dict[str, float] = {}  # symbol -> when its tail was last pulled
+        self._intra: dict[str, tuple[float, dict[str, Any]]] = {}
         self._lock = threading.Lock()
 
+    # -- freshness -------------------------------------------------------------------------
+
+    def freshen(self, symbol: str, *, force: bool = False) -> bool:
+        """Pull the last days of ``symbol`` (and the VIX) if due; True when it did."""
+        refresh = getattr(self.provider, "refresh_tail", None)
+        if not callable(refresh):
+            return False
+        now = time.time()
+        with self._lock:
+            last = self._tail.get(symbol)
+            due = last is None or now - last >= (self.refresh_min_s if force else self.tail_ttl_s)
+            if not due:
+                return False
+            self._tail[symbol] = now  # claim it before the network call
+        try:
+            refresh([symbol, VIX], days=TAIL_DAYS)
+        except Exception as exc:  # stale beats nothing; the next view retries
+            log.warning("charts: tail refresh of %s failed: %s", symbol, exc)
+            with self._lock:
+                self._tail.pop(symbol, None)
+            return False
+        with self._lock:
+            for k in [k for k in self._cache if k[0] == symbol]:
+                del self._cache[k]
+        return True
+
+    def live(self, symbol: str) -> dict[str, Any]:
+        """What the browser needs to say how fresh the page is (never cached)."""
+        quote: dict[str, Any] | None = None
+        q = getattr(self.provider, "quote", None)
+        if callable(q):
+            try:
+                quote = q([symbol]).get(symbol)
+            except Exception as exc:
+                log.info("charts: quote for %s unavailable: %s", symbol, exc)
+        with self._lock:
+            pulled = self._tail.get(symbol)
+        return {
+            "quote": quote,
+            "bars_pulled_at": datetime.fromtimestamp(pulled, UTC).isoformat(timespec="seconds")
+            if pulled
+            else None,
+            "generated_at": now_iso(),
+        }
+
+    # -- the payload -----------------------------------------------------------------------
+
     def symbol(
-        self, symbol: str, start: str, end: str, *, dial: str = "vix_vote"
+        self,
+        symbol: str,
+        start: str,
+        end: str,
+        *,
+        dial: str = "vix_vote",
+        refresh: bool = False,
     ) -> dict[str, Any]:
         symbol = symbol.strip().upper()
         if not symbol or len(symbol) > 12 or not all(c.isalnum() or c in ".-^" for c in symbol):
             raise ValueError("that does not look like a ticker")
         date.fromisoformat(start)
         date.fromisoformat(end)
+        self.freshen(symbol, force=refresh)
+        return {**self._payload(symbol, start, end, dial), "live": self.live(symbol)}
+
+    # -- today, minute by minute ---------------------------------------------------------
+
+    def intraday(self, symbol: str, *, refresh: bool = False) -> dict[str, Any]:
+        """The latest session in 1-minute candles, with the VIX alongside.
+
+        Pulled straight from the vendor (never the bar cache, which is daily and
+        would count a partial day as covered), kept for ``INTRADAY_TTL_S``.
+        """
+        symbol = symbol.strip().upper()
+        if not symbol or len(symbol) > 12 or not all(c.isalnum() or c in ".-^" for c in symbol):
+            raise ValueError("that does not look like a ticker")
+        fetch = getattr(self.provider, "intraday", None)
+        if not callable(fetch):
+            raise LookupError("intraday bars are not available from this data source")
+        now = time.time()
+        with self._lock:
+            hit = self._intra.get(symbol)
+        if hit and now - hit[0] < (INTRADAY_MIN_S if refresh else INTRADAY_TTL_S):
+            return {**hit[1], "live": self.live(symbol)}
+
+        bars = fetch(symbol)
+        if bars is None or bars.empty:
+            raise LookupError(f"no intraday bars for {symbol}")
+        bars = bars.sort_values("timestamp")
+        et = bars["timestamp"].dt.tz_convert(ET)
+        session = et.iloc[-1].date()
+        day = bars[et.dt.date == session]
+        vix_series: list[dict[str, Any]] = []
+        if symbol != VIX:
+            try:
+                v = fetch(VIX)
+                if v is not None and not v.empty:
+                    v = v.sort_values("timestamp")
+                    v = v[v["timestamp"].dt.tz_convert(ET).dt.date == session]
+                    vix_series = [
+                        {"time": _et_epoch(ts), "value": float(c)}
+                        for ts, c in zip(v["timestamp"], v["close"], strict=True)
+                    ]
+            except Exception as exc:
+                log.info("intraday VIX unavailable: %s", exc)
+
+        prev_close = self._prev_close(symbol, session)
+        candles = [
+            {
+                "time": _et_epoch(ts),
+                "open": float(o),
+                "high": float(h),
+                "low": float(lw),
+                "close": float(c),
+                "volume": float(vol) if math.isfinite(float(vol)) else 0.0,
+            }
+            for ts, o, h, lw, c, vol in zip(
+                day["timestamp"],
+                day["open"],
+                day["high"],
+                day["low"],
+                day["close"],
+                day["volume"],
+                strict=True,
+            )
+        ]
+        last_close = candles[-1]["close"]
+        payload = {
+            "symbol": symbol,
+            "interval": "1min",
+            "session": session.isoformat(),
+            "candles": candles,
+            "vix": vix_series,
+            "prev_close": prev_close,
+            "stats": {
+                "open": candles[0]["open"],
+                "high": max(c["high"] for c in candles),
+                "low": min(c["low"] for c in candles),
+                "last": last_close,
+                "last_time": et.iloc[-1].isoformat(timespec="minutes"),
+                "change": (last_close / prev_close - 1.0) if prev_close else None,
+                "volume": sum(c["volume"] for c in candles),
+                "bars": len(candles),
+            },
+        }
+        with self._lock:
+            self._intra[symbol] = (now, payload)
+            while len(self._intra) > 32:
+                self._intra.pop(next(iter(self._intra)))
+        return {**payload, "live": self.live(symbol)}
+
+    def _prev_close(self, symbol: str, session: date) -> float | None:
+        """The daily close before ``session`` (what the day's change is measured from)."""
+        try:
+            raw = self.provider.get_bars(
+                [symbol],
+                (session - timedelta(days=12)).isoformat(),
+                session.isoformat(),
+                Timeframe.DAY,
+            )
+        except Exception as exc:
+            log.info("prev close for %s unavailable: %s", symbol, exc)
+            return None
+        own = raw.loc[raw["symbol"] == symbol].sort_values("timestamp")
+        before = own[own["timestamp"].dt.tz_convert(ET).dt.date < session]
+        return float(before["close"].iloc[-1]) if not before.empty else None
+
+    def _payload(self, symbol: str, start: str, end: str, dial: str) -> dict[str, Any]:
         key = (symbol, start, end)
         with self._lock:
             hit = self._cache.get(key)
@@ -133,6 +323,17 @@ class Charts:
             while len(self._cache) > 16:
                 self._cache.popitem(last=False)
         return payload
+
+
+def _et_epoch(ts: pd.Timestamp) -> int:
+    """Seconds since the epoch of the *Eastern wall-clock* time, read as if UTC.
+
+    Lightweight Charts labels unix times in UTC; shifting them by the Eastern
+    offset makes the axis read 9:30 to 4:00 for every viewer, which is what a
+    session chart should say.
+    """
+    local = ts.tz_convert(ET).tz_localize(None)
+    return int((local - pd.Timestamp("1970-01-01")).total_seconds())
 
 
 def _series(s: pd.Series) -> list[dict[str, Any]]:

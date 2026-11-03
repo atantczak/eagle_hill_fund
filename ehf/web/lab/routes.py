@@ -10,7 +10,8 @@ GET  /lab/api/runs?strategy=&standalone=&sweep_id=&sort=&limit=
 GET  /lab/api/run/{hash}
 GET  /lab/api/catalog
 POST /lab/api/play               {strategy, params, start, end, asset|symbols, ...}
-GET  /lab/api/bars/{symbol}?start=&end=
+GET  /lab/api/bars/{symbol}?start=&end=&refresh=1   (refresh: pull the latest bars now)
+GET  /lab/api/intraday/{symbol}?refresh=1          the latest session, minute by minute
 """
 
 from __future__ import annotations
@@ -157,10 +158,21 @@ def mount_lab(
         return JSONResponse(payload)
 
     @r.get("/api/bars/{symbol}")
-    def api_bars(symbol: str, start: str = "2015-01-01", end: str | None = None) -> JSONResponse:
+    def api_bars(
+        symbol: str, start: str = "2015-01-01", end: str | None = None, refresh: bool = False
+    ) -> JSONResponse:
         end = end or date.today().isoformat()
         try:
-            return JSONResponse(charts.symbol(symbol, start, end))
+            return JSONResponse(charts.symbol(symbol, start, end, refresh=refresh))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from None
+
+    @r.get("/api/intraday/{symbol}")
+    def api_intraday(symbol: str, refresh: bool = False) -> JSONResponse:
+        try:
+            return JSONResponse(charts.intraday(symbol, refresh=refresh))
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
         except LookupError as exc:
