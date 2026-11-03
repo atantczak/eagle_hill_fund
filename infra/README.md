@@ -20,13 +20,13 @@ infra/
 |---|---|---|---|
 | **AWS** (`aws/`) | small, must run even if the Studio is off, emails you | EventBridge Scheduler (cron, America/New_York) | CloudWatch `/aws/lambda/ehf-daily-report` |
 | **AWS site** (`aws/site/`) | the research library at eaglehillfund.com, behind a login | GitHub Actions deploys on push to `main` | CloudWatch `/ecs/ehf-site` |
-| **Studio** (`studio/`) | CPU-heavy research: sweeps, walk-forward, full-universe refresh | launchd user agents (`com.eaglehill.*`) | `ehf/server/var/log/<job>.log` + `<job>.launchd.log` |
+| **Studio** (`studio/`) | CPU-heavy research: sweeps, walk-forward, full-universe refresh | launchd user agents (`com.eaglehill.*`) | `var/log/<job>.log` + `<job>.launchd.log` |
 
 Rules of thumb:
 
 * Anything that needs the cores or the local cache runs on the Studio.
 * Anything that must be *reliable at 6:30 am regardless of the Studio* runs in AWS.
-* A job is a module under `ehf/server/research/jobs/`; `infra/` never contains logic.
+* A job is a module under `ehf/research/jobs/`; `infra/` never contains logic.
 * Secrets come from `.env` locally and Secrets Manager in AWS — never from infra files.
 
 See [`aws/README.md`](aws/README.md) and [`studio/README.md`](studio/README.md).

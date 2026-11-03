@@ -51,10 +51,39 @@ resource "aws_lb_listener" "https" {
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
   certificate_arn   = aws_acm_certificate_validation.site.certificate_arn
 
-  # Public pages (landing, /healthz) go straight to the container.
+  # Everything requires a Cognito login; the only exception is the health
+  # check (rule below). The app therefore always sees who is looking.
+  default_action {
+    type = "authenticate-cognito"
+    authenticate_cognito {
+      user_pool_arn              = aws_cognito_user_pool.site.arn
+      user_pool_client_id        = aws_cognito_user_pool_client.alb.id
+      user_pool_domain           = aws_cognito_user_pool_domain.site.domain
+      scope                      = "openid email profile"
+      session_timeout            = var.session_timeout_s
+      on_unauthenticated_request = "authenticate"
+    }
+  }
+
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.site.arn
+  }
+}
+
+resource "aws_lb_listener_rule" "public" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 1
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.site.arn
+  }
+
+  condition {
+    path_pattern {
+      values = var.public_paths
+    }
   }
 }
 
@@ -77,34 +106,6 @@ resource "aws_lb_listener_rule" "www_to_apex" {
   condition {
     host_header {
       values = ["www.${var.domain}"]
-    }
-  }
-}
-
-resource "aws_lb_listener_rule" "protected" {
-  listener_arn = aws_lb_listener.https.arn
-  priority     = 10
-
-  action {
-    type = "authenticate-cognito"
-    authenticate_cognito {
-      user_pool_arn              = aws_cognito_user_pool.site.arn
-      user_pool_client_id        = aws_cognito_user_pool_client.alb.id
-      user_pool_domain           = aws_cognito_user_pool_domain.site.domain
-      scope                      = "openid email profile"
-      session_timeout            = var.session_timeout_s
-      on_unauthenticated_request = "authenticate"
-    }
-  }
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.site.arn
-  }
-
-  condition {
-    path_pattern {
-      values = var.protected_paths
     }
   }
 }

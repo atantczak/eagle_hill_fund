@@ -6,7 +6,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "ehf/server/site/**"
+      - "ehf/web/**"
       - "infra/aws/site/Dockerfile"
       - "infra/aws/site/requirements.txt"
       - ".github/workflows/site.yml"
@@ -38,7 +38,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r infra/aws/site/requirements.txt pytest httpx
-      - run: python -m pytest ehf/server/tests/test_site.py -q --noconftest -p no:cacheprovider
+      - run: python -m pytest ehf/tests/test_site.py -q --noconftest -p no:cacheprovider
         env:
           PYTHONPATH: .
 

@@ -42,10 +42,10 @@ variable "users" {
   }))
 }
 
-variable "protected_paths" {
-  description = "Load-balancer path patterns that require a Cognito login (max 5). Everything else is public."
+variable "public_paths" {
+  description = "Load-balancer path patterns served WITHOUT a login (max 5). Everything else requires Cognito."
   type        = list(string)
-  default     = ["/library*", "/daily*", "/logout", "/me"]
+  default     = ["/healthz"]
 }
 
 variable "session_timeout_s" {
