@@ -64,11 +64,20 @@ def logout_url(cfg: SiteConfig) -> str:
     return f"https://{cfg.cognito_domain}/logout?{q}"
 
 
+#: The ALB splits a session that exceeds 4K into up to four cookie shards.
+ALB_COOKIE_SHARDS = 4
+
+
 def alb_cookie_names(cookie_header: str) -> list[str]:
-    """Names of the ALB session cookies present in a Cookie header (to expire them)."""
-    names = []
+    """Every ALB session cookie name to expire on logout.
+
+    Always the four possible shards (``-0`` .. ``-3``), per the ALB logout docs, plus
+    any other ``AWSELBAuthSessionCookie*`` name the browser actually sent. Logout must
+    not depend on the load balancer forwarding its own cookie to us.
+    """
+    names = [f"{ALB_COOKIE_PREFIX}-{i}" for i in range(ALB_COOKIE_SHARDS)]
     for part in cookie_header.split(";"):
         name = part.strip().split("=", 1)[0]
-        if name.startswith(ALB_COOKIE_PREFIX):
+        if name.startswith(ALB_COOKIE_PREFIX) and name not in names:
             names.append(name)
     return names

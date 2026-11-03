@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,8 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from ehf.web.auth import alb_cookie_names, logout_url, user_from_headers
 from ehf.web.config import SiteConfig
 from ehf.web.library import Library, Post
+
+EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 log = logging.getLogger(__name__)
 TEMPLATES = Path(__file__).parent / "templates"
@@ -198,9 +201,28 @@ def create_app(
 
     @app.get("/logout")
     def logout(request: Request) -> Response:
+        """Expire the ALB session, then let Cognito end its own session and bounce home.
+
+        The ALB cookie is host-only on ``Path=/``; the deletion must carry the same
+        name, path and (absent) domain to match, and an epoch ``Expires`` so browsers
+        that ignore ``Max-Age`` drop it too. A second copy scoped to the request host's
+        domain covers a cookie that was set with an explicit ``Domain``.
+        """
         resp = RedirectResponse(logout_url(cfg), status_code=302)
+        resp.headers["Cache-Control"] = "no-store"
+        host = request.url.hostname or ""
         for cookie in alb_cookie_names(request.headers.get("cookie", "")):
-            resp.set_cookie(cookie, "", max_age=0, expires=0, path="/", secure=True, httponly=True)
+            for domain in (None, host or None):
+                resp.set_cookie(
+                    cookie,
+                    "",
+                    max_age=0,
+                    expires=EPOCH,
+                    path="/",
+                    domain=domain,
+                    secure=True,
+                    httponly=True,
+                )
         return resp
 
     @app.get("/me")
