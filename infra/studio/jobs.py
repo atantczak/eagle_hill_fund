@@ -96,7 +96,7 @@ JOBS: tuple[Job, ...] = (
     Job(
         name="refresh_data",
         module="ehf.server.research.jobs.refresh_data",
-        args=("--universes", "etf_core,us_liquid,sp500", "--timeframes", "1day"),
+        args=("--universes", "etf_core,us_liquid,sp500,vix_family", "--timeframes", "1day"),
         schedule=({"Hour": 2, "Minute": 0},),  # every night; weekend runs find nothing stale
         description="Snapshot universes + bring the daily price cache up to the last session",
     ),
@@ -113,6 +113,13 @@ JOBS: tuple[Job, ...] = (
         args=("--universes", "etf_core", "--timeframes", "1hour", "--start", "2023-01-01"),
         schedule=({"Weekday": 6, "Hour": 3, "Minute": 0},),  # Saturdays
         description="Weekly hourly-bar top-up for the ETF set (intraday studies)",
+    ),
+    Job(
+        name="vix_study",
+        module="ehf.server.research.jobs.vix_study",
+        args=("--end", "2099-12-31"),  # through the last cached session
+        schedule=({"Weekday": 0, "Hour": 4, "Minute": 0},),  # Sundays, after the nightly refresh
+        description="Weekly VIX overlay study: nine rules + vote vs hold / 200dma, walk-forward + gauntlet",
     ),
 )
 

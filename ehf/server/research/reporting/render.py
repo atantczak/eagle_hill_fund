@@ -149,6 +149,8 @@ def fmt(v: Any, kind: str) -> str:
             return f"{float(v):,.2f}"
         if kind == "num1":
             return f"{float(v):,.1f}"
+        if kind == "num2":
+            return f"{float(v):,.2f}"
         if kind == "int":
             return f"{float(v):.0f}"
         if kind == "money":
@@ -192,6 +194,21 @@ def _is_nan(v: object) -> bool:
 # --- pure section model ----------
 
 
+def dial_tile(dial: Json) -> Tile | None:
+    """The in/out dial as the first hero tile: label, exposure, the three readings."""
+    if not dial or dial.get("exposure") is None:
+        return None
+    label = str(dial.get("label", "unknown"))
+    tone = {"IN": "up", "OUT": "down"}.get(label, "")
+    t, r, v = dial.get("term", {}), dial.get("resid", {}), dial.get("vrp", {})
+    moved = " · changed today" if dial.get("changed") else f" · {dial.get('days_in_state', 0)}d"
+    sub = (
+        f"{fmt(dial.get('exposure'), 'pct0')} in{moved} · curve {fmt(t.get('ratio'), 'num2')} "
+        f"· fear z {fmt(r.get('z'), 'num1')} · premium {fmt(v.get('points'), 'num1')}"
+    )
+    return Tile("Market dial", label, sub, tone)
+
+
 def hero_tiles(market: Json) -> list[Tile]:
     idx, vix, br, tr = (
         market.get("index", {}),
@@ -200,6 +217,9 @@ def hero_tiles(market: Json) -> list[Tile]:
         market.get("treasury", {}),
     )
     tiles: list[Tile] = []
+    dial = dial_tile(market.get("dial", {}))
+    if dial is not None:
+        tiles.append(dial)
     if idx:
         d1 = fmt(idx.get("ret_1d"), "pct")
         tiles.append(
@@ -256,6 +276,30 @@ def hero_tiles(market: Json) -> list[Tile]:
     return tiles
 
 
+def _rule_word(exposure: object) -> str:
+    try:
+        e = float(exposure)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "n/a"
+    return "in" if e >= 0.75 else "out" if e <= 0.25 else "half"
+
+
+def dial_bullet(dial: Json) -> str:
+    t, r, v = dial.get("term", {}), dial.get("resid", {}), dial.get("vrp", {})
+    days = dial.get("days_in_state", 0)
+    moved = "Changed today." if dial.get("changed") else f"Unchanged {days} days."
+    return (
+        f"**Market dial: {dial.get('label')} ({fmt(dial.get('exposure'), 'pct0')} in SPY, "
+        f"rest in bills).** {moved} Fear curve VIX/VIX3M {fmt(t.get('ratio'), 'num2')} "
+        f"({_rule_word(t.get('exposure'))}; out above {fmt(t.get('out_above'), 'num2')}); "
+        f"unexplained-fear z {fmt(r.get('z'), 'num1')} ({_rule_word(r.get('exposure'))}; "
+        f"warns above {fmt(r.get('warn_z'), 'num1')}); insurance premium "
+        f"{fmt(v.get('points'), 'num1')} pts ({_rule_word(v.get('exposure'))}; out below "
+        f"{fmt(v.get('out_below'), 'num1')}, full above {fmt(v.get('full_above'), 'num1')}). "
+        f"Read at the close, acted on at the next open."
+    )
+
+
 def _market_sections(market: Json) -> list[Section]:
     idx, vix, br, tr = (
         market.get("index", {}),
@@ -264,6 +308,9 @@ def _market_sections(market: Json) -> list[Section]:
         market.get("treasury", {}),
     )
     bullets = []
+    dial = market.get("dial", {})
+    if dial and dial.get("exposure") is not None:
+        bullets.append(dial_bullet(dial))
     if idx:
         bullets.append(
             f"**Regime: {idx.get('regime', 'unknown')}.** "

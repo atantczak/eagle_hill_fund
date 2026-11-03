@@ -18,7 +18,8 @@ from ehf.server.research.data.universes import (
 def test_static_universes_are_upper_unique_and_named() -> None:
     for name, syms in STATIC_UNIVERSES.items():
         assert len(set(syms)) == len(syms), name
-        assert all(s == s.upper() and s.isalpha() for s in syms), name
+        # Cboe-style index tickers (^VIX, ^IRX) carry a caret; otherwise plain letters.
+        assert all(s == s.upper() and s.lstrip("^").isalnum() for s in syms), name
     assert set(STATIC_UNIVERSES["etf_core"]) == set(STATIC_UNIVERSES["etf_asset_classes"]) | set(
         STATIC_UNIVERSES["etf_sectors"]
     )

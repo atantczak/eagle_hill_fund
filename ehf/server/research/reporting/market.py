@@ -12,7 +12,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ehf.server.research.reporting.config import ReportConfig
 from ehf.server.research.signals import core as sig
+from ehf.server.research.signals import vix as vixsig
 
 Json = dict[str, Any]
 
@@ -185,4 +187,93 @@ def vix_context(quote: Json) -> Json:
         "avg_50d": _f(quote.get("priceAvg50")),
         "year_high": _f(quote.get("yearHigh")),
         "year_low": _f(quote.get("yearLow")),
+    }
+
+
+# --- the market dial --------------------------------------------------------------
+
+VIX_LONG_SYMBOL = "^VIX3M"
+
+
+def dial_label(exposure: float | None) -> str:
+    if exposure is None:
+        return "unknown"
+    if exposure >= 0.75:
+        return "IN"
+    if exposure <= 0.25:
+        return "OUT"
+    return "HALF"
+
+
+def dial_context(spy_bars: pd.DataFrame, vix_bars: pd.DataFrame, cfg: ReportConfig) -> Json:
+    """The in/out dial from the three core VIX rules (term, residual, VRP), read live.
+
+    Same code path as the backtests (``signals.vix.exposure_vote``): SPY closes
+    and the VIX / VIX3M closes aligned on SPY's sessions, forward-filled. Returns
+    the vote, each rule's reading and exposure, and whether the dial just moved.
+    """
+    if spy_bars.empty or vix_bars.empty:
+        return {}
+    spy = spy_bars.sort_values("date").set_index("date")["close"].astype(float)
+    spy = spy[~spy.index.duplicated(keep="last")]
+
+    def _idx(symbol: str) -> pd.Series | None:
+        sub = vix_bars[vix_bars["symbol"] == symbol].sort_values("date")
+        if sub.empty:
+            return None
+        s_ = sub.set_index("date")["close"].astype(float)
+        s_ = s_[~s_.index.duplicated(keep="last")]
+        return s_.reindex(spy.index).ffill(limit=10)
+
+    vix = _idx("^VIX")
+    vix3m = _idx(VIX_LONG_SYMBOL)
+    if vix is None or vix3m is None or vix.dropna().empty or vix3m.dropna().empty:
+        return {}
+
+    term = {"out_above": cfg.dial_term_out_above, "band": cfg.dial_term_band}
+    resid = {
+        "window": cfg.dial_resid_window,
+        "warn_z": cfg.dial_resid_warn_z,
+        "cooldown": cfg.dial_resid_cooldown,
+    }
+    vrp = {
+        "rv_window": cfg.dial_vrp_rv_window,
+        "out_below": cfg.dial_vrp_out_below,
+        "full_above": cfg.dial_vrp_full_above,
+    }
+    votes = vixsig.exposure_vote(spy, vix, vix3m, term=term, resid=resid, vrp=vrp)
+    last = votes.iloc[-1]
+    prev = votes.iloc[-2] if len(votes) > 1 else last
+    ratio = vixsig.term_structure_ratio(vix, vix3m)
+    resid_z = vixsig.residual_zscore(spy, vix, cfg.dial_resid_window)
+    vrp_pts = vixsig.variance_risk_premium(vix, spy, cfg.dial_vrp_rv_window)
+
+    labels = votes["vote"].map(dial_label)
+    streak = int((labels[::-1] == labels.iloc[-1]).cummin().sum())
+    exposure = _f(last["vote"])
+    return {
+        "as_of": str(pd.Timestamp(spy.index[-1]).date()),
+        "exposure": exposure,
+        "label": dial_label(exposure),
+        "prev_exposure": _f(prev["vote"]),
+        "changed": bool(abs(float(last["vote"]) - float(prev["vote"])) > 1e-9),
+        "days_in_state": streak,
+        "term": {
+            "ratio": _f(ratio.iloc[-1]),
+            "exposure": _f(last["term"]),
+            "out_above": cfg.dial_term_out_above,
+        },
+        "resid": {
+            "z": _f(resid_z.iloc[-1]),
+            "exposure": _f(last["resid"]),
+            "warn_z": cfg.dial_resid_warn_z,
+        },
+        "vrp": {
+            "points": _f(vrp_pts.iloc[-1]),
+            "exposure": _f(last["vrp"]),
+            "out_below": cfg.dial_vrp_out_below,
+            "full_above": cfg.dial_vrp_full_above,
+        },
+        "vix": _f(vix.iloc[-1]),
+        "vix3m": _f(vix3m.iloc[-1]),
     }

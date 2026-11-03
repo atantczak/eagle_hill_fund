@@ -66,6 +66,9 @@ Universe `etf_asset_classes` / `etf_sectors` / `etf_core` (static, versioned).
 4. Risk parity / HRP weighting as an **overlay** on 1–3.
 5. Index mean reversion (short-horizon, `rise_fall` / `bollinger_reversion`).
 6. Overnight vs. intraday return split; seasonality (turn-of-month, day-of-week).
+7. **VIX overlay dial on SPY** (`studies/vix_overlay`): nine fear-gauge rules +
+   their vote as in/half/out dials vs. `CASH` (bill accrual), judged against hold
+   and the 200-day filter on drawdown as much as Sharpe. Weekly on the Studio.
 
 ### Tier B — Liquid US single names (bias mitigated)
 Universe `sp500` (true point-in-time) first, `us_liquid` (current, warned) second.
@@ -106,6 +109,7 @@ hourly; see `data/refresh.py`.
 |---|---|---|
 | 02:00 | `refresh_data` | universes snapshot + daily bars current |
 | 02:30 (next) | `research_batch` | pop N theses → walk-forward → gauntlet → scorecards |
+| Sun 04:00 | `vix_study` | the VIX overlay study: 12 dials × walk-forward → gauntlet → scorecards + summary |
 | 06:30 (AWS) | daily market report | screens + narrative, emailed |
 | Sat 03:00 | `refresh_hourly` | hourly bars for `etf_core` |
 
@@ -135,6 +139,28 @@ small cells per hour, or 1,000–1,500 full-universe cells per hour.
 
 ## 7. Status log
 
+* **2026-11-03** — Results write-up `docs/reports/VIX_SPY_Backtest_Results.pdf`
+  (`scripts/build_vix_results_report.py`, reads `var/scorecards` + `var/results`,
+  13 pages, same plain-English register as the explainer). Findings that only
+  showed up with the equity curves in hand: `vix_term` was *out* for the whole
+  Aug-2008..Jun-2009 window (0% DD there, but invested only 25% of 2009, which is
+  most of its return gap to `vix_surprise`); `vix_surprise` was invested 91% of
+  2009; calendar-year OOS: surprise beat SPY 6/19 years, term 4/19 — by design.
+  Recommendation in the report: surprise as the dial, term as the confirmer,
+  200-day line for slow grinds (next study).
+* **2026-11-02** — VIX overlay study (`studies/vix_overlay`, 12 dials × 19 OOS
+  windows 2008-08..2026-10, train 24m / test 12m, Sharpe and Calmar objectives;
+  summaries `var/scorecards/vix_overlay_{sharpe,calmar}_2026-11-02.md`). Hold: OOS
+  Sharpe 0.60, CAGR 10.1%, max DD −48%. Best dials: `vix_surprise` (0.80–0.84,
+  CAGR ~10%, DD −21.5%, in the market 80%), `vix_term` (0.73–0.84, DD −24…−27%,
+  2025 DD −5%), `vix_sized` (0.76–0.79, DD −14…−15% but CAGR 6.2%), `vix_vote`
+  (0.74, DD −21.7%). All beat the 200-day filter (0.58, CAGR 6.1%). Every dial is
+  *killed* by the gauntlet on `dsr`/`pbo`: DSR pools train cells across windows so
+  even a 1-cell grid (hold) fails, and PBO is NaN below 2 cells — the bars were
+  written for multi-asset sweeps and need a deliberate revisit for single-asset
+  dials. Full-sample 2008 (defaults, in-sample): the 200-day filter held 2008 to
+  −10% while the VIX rules only trimmed it to −25…−35%; the VIX rules win 2020 and
+  2025. Obvious next thesis: term/surprise rule AND 200-day filter.
 * **2026-11-01** — engine evaluation window, walk-forward harness, gauntlet,
   named universes (PIT S&P 500), nightly refresh job, Studio scheduler, infra
   split into `aws/` + `studio/`. First real study `wf_tsmom_d07fbfca`: TSMOM on

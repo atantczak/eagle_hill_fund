@@ -207,6 +207,16 @@ def build_snapshot(
                 warnings, "sector-snapshot", lambda: client.sector_snapshot(as_of), _rows()
             ),
             "vix": _soft(warnings, "vix-quote", lambda: client.quote(VIX_SYMBOL), dict[str, Any]()),
+            "vix_bars": _soft(
+                warnings,
+                "vix-bars",
+                lambda: client.daily_bars(
+                    [VIX_SYMBOL, mk.VIX_LONG_SYMBOL],
+                    run_date - timedelta(days=cfg.dial_history_calendar_days),
+                    run_date,
+                ),
+                pd.DataFrame(),
+            ),
         }
 
     feeds = _timed(timings, "feeds", _feeds)
@@ -258,6 +268,12 @@ def build_snapshot(
     market: Json = {
         "index": mk.index_context(spy_bars),
         "vix": mk.vix_context(feeds["vix"]),
+        "dial": _soft(
+            warnings,
+            "market-dial",
+            lambda: mk.dial_context(spy_bars, feeds["vix_bars"], cfg),
+            dict[str, Any](),
+        ),
         "breadth": mk.breadth(features),
         "treasury": mk.treasury_context(feeds["treasury"]),
         "sectors": mk.sector_context(feeds["sectors"]),

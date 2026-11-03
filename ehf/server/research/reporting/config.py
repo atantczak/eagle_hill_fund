@@ -45,6 +45,17 @@ class ReportConfig:
     news_per_symbol: int = 4
     max_enriched_symbols: int = 40  # per-symbol enrichment calls are capped here
 
+    # --- market dial (the VIX overlay: rules 1-3 vote; see studies.vix_overlay) ---
+    dial_term_out_above: float = 1.0  # VIX/VIX3M above this -> out
+    dial_term_band: float = 0.05  # back in below out_above - band
+    dial_resid_window: int = 63  # rolling beta window for the unexplained-fear residual
+    dial_resid_warn_z: float = 2.0  # residual z above this -> out for a cooldown
+    dial_resid_cooldown: int = 10  # bars out after a warning
+    dial_vrp_rv_window: int = 21  # trailing realized-vol window (bars)
+    dial_vrp_out_below: float = 0.0  # VIX minus realized below this -> out
+    dial_vrp_full_above: float = 4.0  # ... above this -> fully in; between -> half
+    dial_history_calendar_days: int = 400  # VIX history to pull for the dial
+
     # --- screen thresholds ----------------------------------------------------
     outlier_z: float = 3.0
     outlier_min_abs_ret: float = 0.05

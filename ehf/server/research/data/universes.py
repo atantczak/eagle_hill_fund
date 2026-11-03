@@ -40,10 +40,15 @@ ETF_SECTORS: tuple[str, ...] = (
     "XLK", "XLF", "XLE", "XLV", "XLI", "XLP", "XLY", "XLU", "XLB", "XLRE", "XLC",
 )  # fmt: skip
 
+# The VIX overlay dataset (``data.vix``): SPY plus the Cboe index family FMP carries.
+# ``^IRX`` is the 13-week bill yield behind the synthetic CASH leg.
+VIX_FAMILY: tuple[str, ...] = ("SPY", "^VIX", "^VIX3M", "^VIX9D", "^VVIX", "^IRX")
+
 STATIC_UNIVERSES: dict[str, tuple[str, ...]] = {
     "etf_asset_classes": ETF_ASSET_CLASSES,
     "etf_sectors": ETF_SECTORS,
     "etf_core": tuple(dict.fromkeys(ETF_ASSET_CLASSES + ETF_SECTORS)),
+    "vix_family": VIX_FAMILY,
 }
 
 DYNAMIC_UNIVERSES: tuple[str, ...] = ("us_liquid", "sp500")
