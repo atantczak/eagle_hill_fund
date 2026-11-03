@@ -26,8 +26,9 @@ plus a scratch disk in the task.
   complete. First sync: 27,725 files, 828 MB, about $0.15 of PUTs and ~$0.02 a
   month to store.
 - The task gets a scratch volume at `/var/ehf` (part of Fargate's free 20 GiB of
-  ephemeral storage); `EHF_VAR_DIR` points the whole platform at it
-  (`ehf.research.paths`). `ehf.web.lab.mirror` fills it: the database, the
+  ephemeral storage; Fargate mounts it owned by root, so a one-shot root `init`
+  container chowns it to the app user before the web container starts);
+  `EHF_VAR_DIR` points the whole platform at it (`ehf.research.paths`). `ehf.web.lab.mirror` fills it: the database, the
   scorecards and the Cboe cache at startup, the daily bar cache in a background
   thread, and anything else (a run's parquet, a symbol's bars) on first touch.
   The database and the scorecards are re-checked against the bucket once an hour

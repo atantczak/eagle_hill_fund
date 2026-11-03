@@ -14,7 +14,7 @@ from __future__ import annotations
 import random
 import warnings
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import pandas as pd
@@ -145,6 +145,33 @@ class FMPProvider(DataProvider):
         combined.attrs["timeframe"] = tf.value
         _warn_if_truncated(combined, lo, hi, tf)
         return validate_bars(combined)
+
+    def refresh_tail(
+        self,
+        symbols: list[str],
+        *,
+        days: int = 10,
+        timeframe: Timeframe | str = Timeframe.DAY,
+        adjusted: bool = True,
+        end: str | date | None = None,
+    ) -> pd.DataFrame:
+        """Re-fetch the last ``days`` calendar days for ``symbols`` and merge them in.
+
+        ``get_bars`` treats a range as covered when the cache reaches within a
+        few days of its end, which is right for research and wrong for "what
+        does the dial say today": this pulls the tail regardless, so a page read
+        after the close sees that close (and, during the session, the partial
+        bar). Returns the fetched rows; a vendor failure propagates.
+        """
+        tf = Timeframe(timeframe) if not isinstance(timeframe, Timeframe) else timeframe
+        end_d = date.fromisoformat(str(end)) if end else date.today()
+        start_s = (end_d - timedelta(days=days)).isoformat()
+        fetched = self._fetch(
+            [s.upper() for s in symbols], start_s, end_d.isoformat(), tf, adjusted
+        )
+        if not fetched.empty:
+            self.cache.write(fetched, tf, adjusted)
+        return fetched
 
     def _fetch(
         self, symbols: list[str], start: str, end: str, tf: Timeframe, adjusted: bool

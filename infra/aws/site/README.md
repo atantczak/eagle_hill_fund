@@ -28,7 +28,7 @@ ehf/web/             the FastAPI app (routes in app.py, S3 access in library.py,
 | ALB + listeners | `ehf-site` | 80 -> 443 redirect; www -> apex; every path requires a Cognito login except `/healthz` |
 | Cognito user pool + hosted domain + app client | `ehf-site` | invite-only accounts from `terraform.tfvars`, optional authenticator-app MFA, 7-day ALB sessions |
 | ECR repository | `ehf-site` | images tagged by git SHA, last 10 kept, scanned on push |
-| ECS cluster / task definition / service | `ehf-site` | 0.5 vCPU, 2 GiB, read-only root filesystem plus a scratch volume at `/var/ehf` for the mirrored `var/`, circuit breaker with rollback |
+| ECS cluster / task definition / service | `ehf-site` | 0.5 vCPU, 2 GiB, read-only root filesystem plus a scratch volume at `/var/ehf` for the mirrored `var/` (a one-shot root `init` container chowns it to the app user, since Fargate mounts volumes as root), circuit breaker with rollback |
 | IAM roles | `ehf-site-execution`, `ehf-site-task`, `ehf-site-deploy` | pull + logs + the `ehf/fmp` secret; read the reports bucket, read/write `var/*` in the results bucket; GitHub Actions deploys via OIDC from `main`/`dev` |
 | S3 gateway endpoint | `ehf-site-s3` | free; the mirror's S3 traffic stays inside AWS |
 | CloudWatch log group | `/ecs/ehf-site` | container stdout, 60 days |
@@ -56,6 +56,8 @@ python infra/aws/site/ops.py publish-report --slug x --title "..." --date 2026-1
 python infra/aws/site/ops.py list
 python infra/aws/site/ops.py user --email dad@example.com --name "Dad"   # and add to terraform.tfvars
 python infra/aws/site/ops.py logs --minutes 30
+python infra/aws/site/ops.py ideas                                         # the ideas box, newest first
+python infra/aws/site/ops.py ideas --set 20261103-170102-ab12cd --status planned --note "After the QQQ study."
 ```
 
 Code change under `ehf/` -> merge to `main` -> the workflow deploys (about 3 minutes).
@@ -79,6 +81,16 @@ ADR-0009.
 python -m ehf.research.jobs.sync_var --dry-run     # what the next nightly sync would upload
 python -m ehf.research.jobs.sync_var               # push it now (e.g. after a study)
 ```
+
+## The playbook and the ideas box
+
+`/playbook` runs the two rules the VIX write-up recommended (surprise count, fear curve
+flip) on the latest close, from the same strategy code as the backtests, and says IN,
+HALF or OUT with the reasons (ADR-0010). It needs the research platform, so it mounts
+wherever the lab does. `/ideas` takes research questions and feature requests from
+anyone with a login and stores them as `ideas/<id>.json` in the reports bucket; triage
+them with `ops.py ideas` (statuses: new, planned, building, done, declined; the note
+shows under the idea on the site).
 
 ## Running it locally (with the lab)
 

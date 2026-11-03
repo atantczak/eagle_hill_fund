@@ -84,8 +84,9 @@ resource "aws_iam_role_policy" "execution_secrets" {
   policy = data.aws_iam_policy_document.execution_secrets.json
 }
 
-# What the running container may do: read the reports bucket, and read (plus
-# write back bars it fetched) the var/ prefix of the results bucket. Nothing else.
+# What the running container may do: read the reports bucket (and write the ideas
+# box in it), and read (plus write back bars it fetched) the var/ prefix of the
+# results bucket. Nothing else.
 resource "aws_iam_role" "task" {
   name               = "${var.name}-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
@@ -101,6 +102,11 @@ data "aws_iam_policy_document" "task" {
     sid       = "ReadReports"
     actions   = ["s3:GetObject"]
     resources = ["${data.aws_s3_bucket.reports.arn}/*"]
+  }
+  statement {
+    sid       = "WriteIdeas"
+    actions   = ["s3:PutObject"]
+    resources = ["${data.aws_s3_bucket.reports.arn}/ideas/*"]
   }
   statement {
     sid       = "ListVar"
@@ -145,10 +151,33 @@ resource "aws_ecs_task_definition" "site" {
     name = "var"
   }
 
+  # Fargate mounts the scratch volume owned by root, whatever the image says, so a
+  # one-shot root container hands it to the app user before "web" starts. It runs
+  # the same image (the ":latest" the workflow pushes alongside the SHA tag).
   container_definitions = jsonencode([{
+    name      = "init"
+    image     = "${aws_ecr_repository.site.repository_url}:latest"
+    essential = false
+    user      = "0"
+    command   = ["chown", "10001:10001", "/var/ehf"]
+    mountPoints = [{
+      sourceVolume  = "var"
+      containerPath = "/var/ehf"
+      readOnly      = false
+    }]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.site.name
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "init"
+      }
+    }
+    }, {
     name      = "web"
     image     = "${aws_ecr_repository.site.repository_url}:bootstrap" # replaced by the deploy workflow
     essential = true
+    dependsOn = [{ containerName = "init", condition = "SUCCESS" }]
     portMappings = [{
       containerPort = 8080
       protocol      = "tcp"

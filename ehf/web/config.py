@@ -12,6 +12,7 @@ class SiteConfig:
     reports_bucket: str = ""
     library_prefix: str = "library"
     daily_prefix: str = "daily-report"
+    ideas_prefix: str = "ideas"  # the ideas box, in the same bucket
     cognito_domain: str = ""  # e.g. ehf-site-123.auth.us-east-1.amazoncognito.com
     cognito_client_id: str = ""
     region: str = "us-east-1"
@@ -31,6 +32,7 @@ class SiteConfig:
             reports_bucket=os.getenv("EHF_REPORTS_BUCKET", d.reports_bucket),
             library_prefix=os.getenv("EHF_LIBRARY_PREFIX", d.library_prefix).strip("/"),
             daily_prefix=os.getenv("EHF_REPORT_PREFIX", d.daily_prefix).strip("/"),
+            ideas_prefix=os.getenv("EHF_IDEAS_PREFIX", d.ideas_prefix).strip("/"),
             cognito_domain=os.getenv("EHF_COGNITO_DOMAIN", d.cognito_domain),
             cognito_client_id=os.getenv("EHF_COGNITO_CLIENT_ID", d.cognito_client_id),
             region=os.getenv("AWS_REGION", d.region),

@@ -41,6 +41,11 @@ class FakeS3:
         keys = sorted(k for k in self.objects if k.startswith(kw["Prefix"]))
         return {"Contents": [{"Key": k} for k in keys], "IsTruncated": False}
 
+    def put_object(self, **kw: Any) -> dict[str, Any]:
+        body = kw["Body"]
+        self.objects[kw["Key"]] = body if isinstance(body, bytes) else body.encode()
+        return {}
+
     def get_object(self, **kw: Any) -> dict[str, Any]:
         key = kw["Key"]
         if key not in self.objects:

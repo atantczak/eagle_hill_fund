@@ -432,5 +432,34 @@ window.EHF = (function () {
     load();
   }
 
-  return { runPage, browser, playground, symbolPage, runView, fmt };
+  // ---- the playbook: one chart per rule ---------------------------------------
+  function playbookPage(p) {
+    const t = theme(); const times = p.series.time;
+    const price = times.map((d, i) => ({ time: d, value: p.series.close[i] })).filter((x) => x.value != null);
+    const charts = [];
+    for (const r of p.rules) {
+      const host = $('#chart-' + r.key), head = $('#head-' + r.key); if (!host) continue;
+      const chart = makeChart(host);
+      const px = addLine(chart, price, { color: t.grey, width: 1.5, priceFormat: { type: 'price', precision: 2, minMove: 0.01 } });
+      const isPct = r.reading_fmt === 'pct';
+      const rf = isPct ? (v) => (fin(v) ? (v * 100).toFixed(0) + '%' : '–') : (v) => (fin(v) ? v.toFixed(3) : '–');
+      const scale = isPct ? 100 : 1;
+      const reading = r.series.time.map((d, i) => ({ time: d, value: r.series.reading[i] == null ? undefined : r.series.reading[i] * scale })).filter((x) => x.value !== undefined);
+      const rd = addLine(chart, reading, { color: t.blue, width: 2, pane: 1, format: isPct ? (v) => v.toFixed(0) + '%' : (v) => v.toFixed(2), minMove: isPct ? 1 : 0.01 });
+      const flat = (v) => r.series.time.map((d) => ({ time: d, value: v * scale }));
+      addLine(chart, flat(r.out_above), { color: t.down, width: 1, dashed: true, pane: 1, last: false, format: isPct ? (v) => v.toFixed(0) + '%' : (v) => v.toFixed(2), minMove: isPct ? 1 : 0.01 });
+      addLine(chart, flat(r.in_below), { color: t.up, width: 1, dashed: true, pane: 1, last: false, format: isPct ? (v) => v.toFixed(0) + '%' : (v) => v.toFixed(2), minMove: isPct ? 1 : 0.01 });
+      stretch(chart, [2.2, 1.3]);
+      legend(chart, head, [
+        { series: px, label: p.asset, color: t.grey, fmt: fmt.px, last: last(p.series.close) },
+        { series: rd, label: r.title.toLowerCase(), color: t.blue, fmt: (v) => rf(fin(v) ? v / scale : v), last: r.reading == null ? null : r.reading * scale },
+      ], times);
+      const bl = bands(chart, host, times); bl.set(outBands(r.series.time, r.series.exposure));
+      chart.timeScale().fitContent();
+      charts.push(chart);
+    }
+    charts.forEach((a) => a.timeScale().subscribeVisibleLogicalRangeChange((rg) => { if (rg) charts.forEach((b) => { if (b !== a) b.timeScale().setVisibleLogicalRange(rg); }); }));
+  }
+
+  return { runPage, browser, playground, symbolPage, runView, playbookPage, fmt };
 })();

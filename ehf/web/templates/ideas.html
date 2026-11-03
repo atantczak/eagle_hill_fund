@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Ideas · {{ org }}{% endblock %}
+{% block content %}
+<div class="eyebrow">Ideas</div>
+<h1 class="gradient">What should we look at next?</h1>
+<p class="lede">A research question, a strategy to test, something the site should do. Write it down here; Andrew reads the list when planning what gets built, and each idea shows its status below.</p>
+{% if sent %}<div class="notice ok">Thanks. It is in the queue as <span class="mono">{{ sent }}</span>.</div>{% endif %}
+{% if error %}<div class="notice err">{{ error }}</div>{% endif %}
+<form class="card idea-form" method="post" action="/ideas">
+  <div class="row">
+    <div class="field" style="flex:2"><label for="i-title">Title</label><input type="text" id="i-title" name="title" maxlength="120" required placeholder="e.g. Does the fear curve flip work on QQQ?" value="{{ form.title if form else '' }}"></div>
+    <div class="field"><label for="i-kind">Kind</label><select id="i-kind" name="kind">{% for k, label in kinds.items() %}<option value="{{ k }}"{% if (form.kind if form else 'research') == k %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+  </div>
+  <div class="field"><label for="i-details">Details (optional)</label><textarea id="i-details" name="details" rows="4" maxlength="4000" placeholder="What would we learn, or what would it let you do? Anything you already know that matters.">{{ form.details if form else '' }}</textarea></div>
+  {% if not me %}<div class="field"><label for="i-author">Your name</label><input type="text" id="i-author" name="author" maxlength="80" value="{{ form.author if form else '' }}"></div>{% endif %}
+  <div class="actions" style="margin:4px 0 0"><button class="btn primary" type="submit">Add it to the list</button>{% if me %}<span class="muted small">Submitting as {{ me.display }}</span>{% endif %}</div>
+</form>
+{% if load_error %}<div class="notice err">The list could not be loaded: {{ load_error }}</div>{% endif %}
+<h2 style="margin-top:28px">The list <span class="muted small">({{ ideas|length }})</span></h2>
+{% if not ideas %}<p class="muted">Nothing yet. Yours would be the first.</p>{% endif %}
+<div class="ideas">
+{% for i in ideas %}
+  <article class="card idea" id="{{ i.id }}">
+    <div class="idea-head">
+      <h3>{{ i.title }}</h3>
+      <span class="pill {{ {'new':'neutral','planned':'warn','building':'warn','done':'pass','declined':'fail'}[i.status] if i.status in ['new','planned','building','done','declined'] else 'neutral' }}">{{ i.status_label }}</span>
+    </div>
+    <div class="meta small muted"><span class="tag">{{ i.kind_label }}</span> {{ i.author }} · {{ i.created }}</div>
+    {% if i.details %}<p class="details">{{ i.details }}</p>{% endif %}
+    {% if i.note %}<div class="notice small"><b>Andrew:</b> {{ i.note }}</div>{% endif %}
+  </article>
+{% endfor %}
+</div>
+{% endblock %}

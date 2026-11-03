@@ -11,6 +11,8 @@ Routes (the load balancer enforces a Cognito login on every path except
     GET /daily                     daily reports by date
     GET /daily/{date}              the stored report.html, as-is
     GET /daily/{date}/{name}       report.pdf / report.md / ...
+    GET /playbook                  the vetted VIX rules read from the latest close (web.playbook)
+    GET|POST /ideas                the ideas box: propose research or features (ehf.web.ideas)
     GET /logout                    expire the ALB session, bounce through Cognito's logout
     GET /me                        who the ALB says you are
     /lab/...                       the research lab (ehf.web.lab): on the Studio over var/,
@@ -103,11 +105,15 @@ def lab_available(mode: str) -> bool:
 
 
 def create_app(
-    cfg: SiteConfig | None = None, library: Library | None = None, lab: Any | None = None
+    cfg: SiteConfig | None = None,
+    library: Library | None = None,
+    lab: Any | None = None,
+    ideas: Any | None = None,
 ) -> FastAPI:
     """Build the app. ``lab`` is an optional ``(data, playground, charts)`` triple
-    (tests inject fakes); by default the lab mounts when the research platform
-    imports, with the local results store and the FMP provider."""
+    and ``ideas`` an optional ``IdeaBox`` (tests inject fakes); by default the
+    lab mounts when the research platform imports, with the local results store
+    and the FMP provider, and the ideas box shares the library's S3 client."""
     cfg = cfg or SiteConfig.from_env()
     if library is None:
         import boto3  # local import: tests inject a fake and never need boto3
@@ -131,6 +137,7 @@ def create_app(
         site_url=cfg.site_url,
         lab=with_lab,
         lab_readonly=bool(cfg.var_bucket),  # the mirror never writes back: no "log" box
+        playbook=False,  # flipped below once the lab's provider is up
     )
 
     def page(request: Request, name: str, **ctx: Any) -> HTMLResponse:
@@ -215,7 +222,16 @@ def create_app(
             templates.env.globals["lab"] = False
         else:
             mount_lab(app, page, data=data, playground=playground, charts=charts)
+            from ehf.web.playbook import Playbook, mount_playbook
 
+            if data.provider is not None:
+                mount_playbook(app, page, Playbook(data.provider, data))
+                templates.env.globals["playbook"] = True
+
+    from ehf.web.ideas import IdeaBox, mount_ideas
+
+    box = ideas if ideas is not None else IdeaBox(lib.s3, lib.bucket, prefix=cfg.ideas_prefix)
+    mount_ideas(app, page, box)
     return app
 
 
