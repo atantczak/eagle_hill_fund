@@ -128,10 +128,32 @@ window.EHF = (function () {
   }
   const outBands = (times, exposure) => [...spans(times, exposure, (v) => v != null && v < 0.05, 'out', 'out of the market'), ...spans(times, exposure, (v) => v != null && v >= 0.05 && v < 0.95, 'half', 'partly in')];
 
+  // ---- the short version: what was tested, the rule in words, what happened ---------
+  // Every html field comes from ehf.web.lab.explain, which escapes anything a spec supplied.
+  function explainCard(e) {
+    if (!e) return null;
+    const card = el('section', 'explain');
+    const v = e.verdict;
+    const pills = `<span class="pill neutral">${esc(e.tag)}</span>${v ? `<span class="pill ${v.status === 'pass' ? 'pass' : 'fail'}">${v.status === 'pass' ? 'passed the gauntlet' : 'killed'}</span>` : ''}`;
+    const rules = (e.rules || []).length ? `<div class="ex-rules">${e.rules.map((r) => `<div class="ex-rule"><div class="k">${esc(r.when)}</div><div>${r.html}</div></div>`).join('')}</div>` : '';
+    const math = e.math ? `<div class="ex-math"><span class="k">The math</span>${e.math}</div>` : '';
+    const verdict = v ? `<div class="ex-verdict ${v.status === 'pass' ? 'pass' : ''}"><b>Verdict.</b> ${v.html}</div>` : '';
+    card.innerHTML = `<div class="eyebrow">The short version</div>
+      <h2>${esc(e.name)} ${pills}</h2>
+      ${e.headline ? `<p class="headline">${esc(e.headline)}</p>` : ''}
+      <div class="ex-grid">
+        <div><h4>What was tested</h4><p>${e.what}</p>${rules}${math}</div>
+        <div><h4>What happened</h4><ul>${(e.results || []).map((r) => `<li>${r}</li>`).join('')}</ul>${verdict}</div>
+      </div>
+      <details class="ex-setup"><summary>The setup: dates, costs, and what it was measured against</summary><ul>${(e.setup || []).map((r) => `<li>${r}</li>`).join('')}</ul></details>`;
+    return card;
+  }
+
   // ---- one run, charted ---------------------------------------------------------
   function runView(root, p, opts = {}) {
     root.innerHTML = '';
     const t = theme(); const S = p.series; const times = S.time; const hasB = !!S.benchmark;
+    const short = explainCard(p.explain); if (short) root.appendChild(short);
     const m = p.metrics || {}, b = p.benchmark_metrics || {}; const bname = p.benchmark || p.asset;
     const timeIn = S.exposure && S.exposure.length ? S.exposure.reduce((a, v) => a + Math.min(1, Math.abs(v || 0)), 0) / S.exposure.length : null;
 
@@ -231,7 +253,8 @@ window.EHF = (function () {
     try { p = await getJSON(`/lab/api/run/${hash}`); } catch (e) { root.innerHTML = `<h1>Run ${esc(hash)}</h1><div class="notice err">${esc(e.message)}</div>`; return; }
     const study = p.study;
     const uni = (p.universe && p.universe.symbols) || [];
-    root.innerHTML = `<h1 class="gradient">${esc(p.strategy)}</h1>
+    const title = p.explain && p.explain.name ? `${esc(p.explain.name)} <span class="key mono">${esc(p.strategy)}</span>` : esc(p.strategy);
+    root.innerHTML = `<h1 class="gradient">${title}</h1>
       <div class="meta">${esc(hash)} · ${esc(p.start)} → ${esc(p.end)} · ${esc(uni.length > 8 ? uni.length + ' symbols' : uni.join(', '))} · slippage ${esc((p.costs || {}).slippage_bps)} bps · ${esc(String(p.fill_model || '').replace('_', ' '))} fills${p.git_sha ? ` · ${esc(p.git_sha)}${p.dirty ? '*' : ''}` : ''}${p.created_at ? ` · logged ${esc(String(p.created_at).slice(0, 10))}` : ''}</div>
       <div class="chips" style="margin:6px 0 12px">${study ? `<span class="pill ${study.verdict === 'pass' ? 'pass' : 'fail'}">${esc(study.verdict || 'study')}</span>` : ''}${p.sweep_id ? `<span class="chip">sweep <b>${esc(p.sweep_id)}</b></span>` : ''}${paramChips(p.params)}</div>
       <div class="actions" style="margin:0 0 6px">
@@ -256,7 +279,38 @@ window.EHF = (function () {
     }).join('');
   }
 
+  // ---- hover card: the short version of a row before you click it -------------------
+  // A row carries its tip as data-tip-name / data-tip-tag / data-tip (HTML built server-side
+  // by ehf.web.lab.explain.blurb, which escapes anything a spec supplied).
+  function hoverCards(root) {
+    if (matchMedia('(hover: none)').matches) return;
+    const card = el('div', 'hovercard'); card.hidden = true; document.body.appendChild(card);
+    let timer = null, row = null;
+    const place = (x, y) => {
+      const w = card.offsetWidth, hgt = card.offsetHeight, vw = innerWidth, vh = innerHeight;
+      let left = x + 16, top = y + 18;
+      if (left + w > vw - 12) left = Math.max(12, x - w - 16);
+      if (top + hgt > vh - 12) top = Math.max(12, y - hgt - 12);
+      card.style.left = left + 'px'; card.style.top = top + 'px';
+    };
+    const show = (tr, x, y) => {
+      card.innerHTML = `<div class="hc-head"><b>${esc(tr.dataset.tipName)}</b><span class="pill neutral">${esc(tr.dataset.tipTag)}</span></div><div class="hc-body">${tr.dataset.tip}</div><div class="hc-foot">Click to open the full run</div>`;
+      card.hidden = false; place(x, y);
+    };
+    const hide = () => { clearTimeout(timer); timer = null; row = null; card.hidden = true; };
+    root.addEventListener('mouseover', (e) => {
+      const tr = e.target.closest('tr[data-tip]'); if (!tr || tr === row) return;
+      clearTimeout(timer); row = tr; card.hidden = true;
+      timer = setTimeout(() => show(tr, e.clientX, e.clientY), 220);
+    });
+    root.addEventListener('mousemove', (e) => { if (row && !card.hidden) place(e.clientX, e.clientY); });
+    root.addEventListener('mouseout', (e) => { const tr = e.target.closest('tr[data-tip]'); if (tr && tr === row && !tr.contains(e.relatedTarget)) hide(); });
+    root.addEventListener('mousedown', hide);
+    document.addEventListener('scroll', hide, { passive: true });
+  }
+
   function browser() {
+    hoverCards(document);
     const tabs = document.querySelectorAll('.tabs [role=tab]');
     tabs.forEach((b) => b.addEventListener('click', () => { tabs.forEach((x) => x.setAttribute('aria-selected', String(x === b))); $('#tab-studies').hidden = b.dataset.tab !== 'studies'; $('#tab-runs').hidden = b.dataset.tab !== 'runs'; if (b.dataset.tab === 'runs' && !runsLoaded) loadRuns(); }));
     document.querySelectorAll('tr.link[data-href]').forEach((tr) => tr.addEventListener('click', () => { location.href = tr.dataset.href; }));
@@ -278,7 +332,10 @@ window.EHF = (function () {
       rows.sort((a, b) => { const va = val(a, sortKey), vb = val(b, sortKey); if (va == null && vb == null) return 0; if (va == null) return 1; if (vb == null) return -1; const c = typeof va === 'number' ? va - vb : String(va).localeCompare(String(vb)); return sortAsc ? c : -c; });
       $('#run-count').textContent = `${rows.length} of ${runs.length} runs`;
       body.innerHTML = rows.map((r) => `<tr class="link" data-href="/lab/run/${r.hash}"><td class="mono small">${r.hash}</td><td><b>${esc(r.strategy)}</b></td><td class="small mono">${esc(paramsShort(r.params))}</td><td class="small mono">${esc(r.universe.length > 28 ? r.universe.slice(0, 26) + '…' : r.universe)}</td><td class="small mono">${r.start} → ${r.end}</td><td class="num">${fmt.num(r.metrics.sharpe)}</td><td class="num ${signCls(r.metrics.cagr)}">${fmt.pct(r.metrics.cagr)}</td><td class="num neg">${fmt.pct(r.metrics.max_drawdown)}</td><td class="num">${fmt.int(r.metrics.n_trades)}</td><td class="small mono">${String(r.created_at || '').slice(0, 10)}</td></tr>`).join('') || '<tr><td colspan="10" class="muted">No runs match.</td></tr>';
-      body.querySelectorAll('tr.link').forEach((tr) => tr.addEventListener('click', () => { location.href = tr.dataset.href; }));
+      body.querySelectorAll('tr.link').forEach((tr, i) => {
+        tr.addEventListener('click', () => { location.href = tr.dataset.href; });
+        const b = rows[i].blurb; if (b) { tr.dataset.tipName = b.name; tr.dataset.tipTag = b.tag; tr.dataset.tip = b.text; }
+      });
     }
     async function loadRuns() {
       runsLoaded = true; body.innerHTML = '<tr><td colspan="10"><span class="spin"></span></td></tr>';
@@ -602,5 +659,5 @@ window.EHF = (function () {
     charts.forEach((a) => a.timeScale().subscribeVisibleLogicalRangeChange((rg) => { if (rg) charts.forEach((b) => { if (b !== a) b.timeScale().setVisibleLogicalRange(rg); }); }));
   }
 
-  return { runPage, browser, playground, symbolPage, runView, playbookPage, freshness, fmt };
+  return { runPage, browser, playground, symbolPage, runView, playbookPage, freshness, fmt, explainCard };
 })();

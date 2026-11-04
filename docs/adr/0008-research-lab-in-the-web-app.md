@@ -19,6 +19,13 @@ the same FastAPI app, behind the same Cognito login when deployed:
   one JSON payload per run: equity vs. buy-and-hold (SPY, or the timed asset for a dial), drawdowns, exposure
   rebuilt from the trade ledger (with resets at walk-forward window starts),
   candles of the primary asset with trade markers, yearly returns, windows.
+- ``explain.py`` writes the short version the run page opens with: the rule in
+  plain words with the numbers that actually ran, the equation, the setup
+  (dates, costs, the grey line it is judged against, the walk-forward grid) and
+  what happened, with the gauntlet's verdict spelled out check by check. One
+  entry per strategy; an unknown strategy gets its docstring and settings.
+  ``blurb()`` is the one-or-two-sentence form of the same words, carried on every
+  study and run row and shown as a hover card on the backtests list.
 - ``playground.py`` turns the strategy registry into a form (ranges from the
   study grids, otherwise widened around the default), runs the real engine on
   demand, caches by config hash, and logs to the registry only when asked.

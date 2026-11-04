@@ -4,7 +4,8 @@
 directory. ``run_payload`` turns a run — stored or just computed — into the JSON
 the browser draws: equity vs. a buy-and-hold benchmark, drawdowns, exposure rebuilt
 from the trade ledger, candles of the primary asset with trade markers, yearly
-returns, and the walk-forward windows when the run is a stitched out-of-sample curve.
+returns, the walk-forward windows when the run is a stitched out-of-sample curve, and
+``explain``: the run in plain words (``ehf.web.lab.explain``).
 
 The benchmark is deliberately not "the first symbol in the basket": a dial is
 judged against holding the asset it times, a strategy that names a ``benchmark``
@@ -31,6 +32,7 @@ from ehf.research.data.provider import DataProvider
 from ehf.research.data.schema import Timeframe
 from ehf.research.paths import SCORECARD_DIR
 from ehf.research.results.store import LocalResultStore
+from ehf.web.lab.explain import blurb, explain
 
 SESSION_TZ = "America/New_York"
 BENCHMARK = "SPY"  # buy-and-hold comparison for every portfolio strategy
@@ -189,6 +191,15 @@ class Scorecard:
             "full_hash": self.full_hash,
             "verdict": v.get("status"),
             "failed": v.get("failed") or [],
+            "checks": [
+                {
+                    k: _clean(c.get(k))
+                    for k in ("name", "value", "threshold", "op", "passed", "note")
+                }
+                for c in (v.get("checks") or [])
+                if isinstance(c, dict)
+            ],
+            "grid": self.payload.get("grid") or {},
             "objective": wf.get("objective"),
             "train_months": wf.get("train_months"),
             "test_months": wf.get("test_months"),
@@ -203,6 +214,18 @@ class Scorecard:
             "dd_2020": _clean(extra.get("dd_2020")),
             "dd_2022": _clean(extra.get("dd_2022")),
             "modified": self.path.stat().st_mtime,
+            "blurb": blurb(
+                self.strategy,
+                base.get("params") or {},
+                universe=(base.get("universe") or {}).get("symbols") or (),
+                asset=primary_asset(base),
+                metrics=m,
+                market={
+                    "cagr": extra.get("mkt_cagr"),
+                    "max_drawdown": extra.get("mkt_max_drawdown"),
+                },
+                out_of_sample=True,
+            ),
         }
 
 
@@ -322,18 +345,28 @@ class LabData:
         df = df.sort_values(sort, ascending=not descending, na_position="last").head(limit)
         rows = []
         for _, r in df.iterrows():
+            run_params_ = json.loads(r["params_json"])
+            metrics = {c[2:]: _clean(r[c]) for c in df.columns if c.startswith("m_")}
+            spec = json.loads(r["spec_json"]) if r.get("spec_json") else {}
             rows.append(
                 {
                     "hash": r["config_hash"],
                     "strategy": r["strategy"],
-                    "params": json.loads(r["params_json"]),
+                    "params": run_params_,
                     "universe": r["universe"],
                     "start": r["data_start"],
                     "end": r["data_end"],
                     "sweep_id": r["sweep_id"],
                     "status": r["status"],
                     "created_at": r["created_at"],
-                    "metrics": {c[2:]: _clean(r[c]) for c in df.columns if c.startswith("m_")},
+                    "metrics": metrics,
+                    "blurb": blurb(
+                        str(r["strategy"]),
+                        run_params_,
+                        universe=str(r["universe"] or ""),
+                        asset=primary_asset(spec) if spec else None,
+                        metrics=metrics,
+                    ),
                 }
             )
         return rows
@@ -521,7 +554,7 @@ def run_payload(
             for i, w in enumerate(windows)
         ]
 
-    return {
+    payload: dict[str, Any] = {
         **(meta or {}),
         "strategy": spec.get("strategy"),
         "params": spec.get("params") or {},
@@ -551,6 +584,8 @@ def run_payload(
         "yearly": yearly,
         "windows": win_out,
     }
+    payload["explain"] = explain(payload)  # the short version, in words (ehf.web.lab.explain)
+    return payload
 
 
 def spec_dict(spec: RunSpec) -> dict[str, Any]:
