@@ -89,6 +89,28 @@ def resolve_universe(name: str, provider: DataProvider | None, as_of: str | date
 # --- point-in-time S&P 500 (pure) ------------------------------------------------------------
 
 
+def change_date(c: dict[str, Any]) -> str:
+    """ISO date of a change-log row. FMP's ``date`` is ISO; its ``dateAdded`` is prose
+    ("November 18, 1982"), which must never be compared as a string."""
+    for key in ("date", "dateAdded"):
+        raw = str(c.get(key) or "").strip()
+        if not raw:
+            continue
+        if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
+            return raw[:10]
+        try:
+            from datetime import datetime as _dt
+
+            for fmt in ("%B %d, %Y", "%b %d, %Y"):
+                try:
+                    return _dt.strptime(raw, fmt).date().isoformat()
+                except ValueError:
+                    pass
+        except Exception:
+            pass
+    return ""
+
+
 def sp500_members_as_of(
     current: Iterable[str], changes: Iterable[dict[str, Any]], as_of: str | date
 ) -> set[str]:
@@ -101,8 +123,8 @@ def sp500_members_as_of(
     """
     as_of_s = as_of.isoformat() if isinstance(as_of, date) else str(as_of)[:10]
     members = {s.upper() for s in current if s}
-    later = [c for c in changes if str(c.get("dateAdded") or c.get("date") or "")[:10] > as_of_s]
-    later.sort(key=lambda c: str(c.get("dateAdded") or c.get("date") or ""), reverse=True)
+    later = [c for c in changes if change_date(c) > as_of_s]
+    later.sort(key=change_date, reverse=True)
     for c in later:
         added = str(c.get("symbol") or "").upper()
         removed = str(c.get("removedTicker") or "").upper()

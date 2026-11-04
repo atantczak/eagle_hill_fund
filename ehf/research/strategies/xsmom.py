@@ -27,6 +27,7 @@ class CrossSectionalMomentum(Strategy):
         "skip": 21,  # skip the most recent ~1 month (short-term reversal)
         "quantile": 0.2,  # long the top 20% / short the bottom 20%
         "gross_exposure": 1.0,
+        "long_only": False,  # True: hold the top quantile only (sector/asset rotation)
     }
 
     def generate_signals(self, panel: Panel) -> pd.DataFrame:
@@ -42,4 +43,5 @@ class CrossSectionalMomentum(Strategy):
             signals_df,
             quantile=self.p("quantile"),
             gross=self.p("gross_exposure"),
+            long_short=not self.p("long_only"),
         )

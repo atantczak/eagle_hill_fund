@@ -50,3 +50,20 @@ def test_sp500_members_as_of_undoes_later_changes_only() -> None:
     assert sp500_members_as_of(current, changes, "2025-01-01") == set(current)
     # a change dated exactly on as_of already happened (not undone)
     assert "NEW2" in sp500_members_as_of(current, changes, "2024-03-18")
+
+
+def test_sp500_change_log_prose_dates_are_parsed():
+    from ehf.research.data.universes import change_date, sp500_members_as_of
+
+    changes = [
+        {
+            "dateAdded": "November 18, 1982",
+            "date": "1982-11-18",
+            "symbol": "AAPL",
+            "removedTicker": "DN",
+        },
+        {"dateAdded": "March 1, 2021", "symbol": "NEW", "removedTicker": "OLD"},
+    ]
+    assert change_date(changes[1]) == "2021-03-01"
+    members = sp500_members_as_of(["AAPL", "NEW"], changes, "2015-06-30")
+    assert members == {"AAPL", "OLD"}

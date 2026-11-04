@@ -9,6 +9,8 @@ package registers the built-in strategies:
   * ``tsmom_regime``        — TSMOM gated to trending (low-entropy/high-Hurst) regimes
   * ``bollinger_reversion`` — long-term Bollinger-band mean reversion
   * ``xsmom``               — cross-sectional momentum, dollar-neutral long/short
+  * ``pead`` … ``dollar_em`` — ten FMP alternative-data strategies + ``member_ew`` (``altdata``)
+  * ``ew_hold``             — equal-weight buy-and-hold of the basket (the portfolio benchmark)
   * ``dial_hold``, ``dial_sma`` — in/out benchmarks on one asset vs. cash (``dial``)
   * ``vix_term`` … ``vix_vote`` — the nine VIX rules + their vote (``vix_overlay``)
 
@@ -17,6 +19,8 @@ The §10 conviction ideas will use a separate lightweight ``Screen`` base.
 
 # Importing the concrete strategies registers them under their RunSpec keys.
 from ehf.research.strategies import (  # noqa: E402,F401  (import for side effect)
+    altdata,
+    benchmarks,
     bollinger,
     dial,
     leverage,
