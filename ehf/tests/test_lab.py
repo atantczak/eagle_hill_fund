@@ -487,3 +487,233 @@ def test_lab_off_hides_everything() -> None:
 
 def test_today_is_a_valid_default_end() -> None:
     assert date.today().isoformat() >= "2026-01-01"
+
+
+# -- the short version (ehf.web.lab.explain) ----------------------------------------------
+
+
+def _payload(**over: Any) -> dict[str, Any]:
+    """A run payload the way ``run_payload`` shapes it, small enough to write by hand."""
+    base: dict[str, Any] = {
+        "hash": "abcdef0123456789",
+        "strategy": "vix_term",
+        "params": {"asset": "SPY", "out_above": 1.05, "band": 0.1, "confirm_bars": 3},
+        "universe": {"symbols": ["SPY", "CASH", "^VIX", "^VIX3M"]},
+        "start": "2006-08-01",
+        "end": "2026-10-30",
+        "initial_capital": 1_000_000.0,
+        "costs": {"slippage_bps": 1.0},
+        "fill_model": "next_open",
+        "asset": "SPY",
+        "benchmark": "SPY",
+        "metrics": {
+            "n_bars": 5040.0,
+            "cagr": 0.075,
+            "total_return": 3.3,
+            "max_drawdown": -0.33,
+            "sharpe": 0.64,
+            "ann_vol": 0.13,
+        },
+        "benchmark_metrics": {
+            "cagr": 0.092,
+            "total_return": 4.9,
+            "max_drawdown": -0.565,
+            "sharpe": 0.55,
+            "ann_vol": 0.19,
+        },
+        "series": {"exposure": [1.0, 1.0, 0.0, 1.0], "gross": [1.0, 1.0, 0.0, 1.0]},
+        "n_trades": 355,
+        "yearly": [
+            {"year": 2020, "strategy": 0.10, "benchmark": 0.18},
+            {"year": 2022, "strategy": -0.265, "benchmark": -0.18},
+        ],
+        "windows": None,
+        "study": None,
+    }
+    base.update(over)
+    return base
+
+
+def test_explain_puts_the_numbers_in_the_sentences() -> None:
+    from ehf.web.lab.explain import explain
+
+    e = explain(_payload())
+    assert e["name"] == "Fear curve flip" and e["tag"] == "VIX rule 1" and e["kind"] == "dial"
+    assert e["headline"].startswith("7.5% a year against 9.2% for holding SPY")
+    assert "VIX3M" in e["what"] and "cash" in e["what"]
+    out, back = e["rules"]
+    assert out["when"] == "Step out of SPY when" and "above 1.05" in out["html"]
+    assert "3 days in a row" in out["html"]  # confirm_bars=3
+    assert "below 0.95" in back["html"]  # out_above - band
+    assert "VIX<sub>t</sub>" in e["math"]
+    assert "$1,000,000 became $4,300,000" in e["results"][0]
+    assert "worse than the market" in e["results"][0]
+    assert "-33.0%" in e["results"][1] and "better than holding the market" in e["results"][1]
+    assert "In the market <b>75%</b>" in " ".join(e["results"])
+    assert "355 trades, about 18 a year" in " ".join(e["results"])
+    assert "Beat SPY in <b>0 of 2</b>" in e["results"][-1] and "-26.5% in 2022" in e["results"][-1]
+    assert "2006-08-01" in e["setup"][0] and "20.0 years" in e["setup"][0]
+    assert "Treasury bill" in e["setup"][1] and "1 basis point of slippage" in e["setup"][2]
+    assert e["verdict"] is None and not any("Walk-forward" in s for s in e["setup"])
+
+
+def test_explain_walk_forward_names_the_grid_and_the_verdict() -> None:
+    from ehf.web.lab.explain import explain
+
+    p = _payload(
+        params={
+            "base_params": {},
+            "grid": {"out_above": [0.95, 1.0, 1.05], "band": [0.02, 0.05], "confirm_bars": [1]},
+            "walk_forward": {"train_months": 24, "test_months": 12},
+        },
+        windows=[{"window": 0, "test_start": "2008-08-01", "test_end": "2009-07-31"}] * 19,
+        study={
+            "verdict": "killed",
+            "failed": ["dsr", "trades", "pbo"],
+            "objective": "calmar",
+            "train_months": 24,
+            "test_months": 12,
+            "dd_2008": -0.21,
+            "dd_2020": -0.15,
+            "checks": [
+                {"name": "dsr", "value": 0.12, "threshold": 0.95, "passed": False},
+                {"name": "trades", "value": 19.0, "threshold": 100.0, "passed": False},
+                {"name": "pbo", "value": None, "threshold": 0.3, "passed": False},
+            ],
+        },
+    )
+    e = explain(p)
+    wf = next(s for s in e["setup"] if "Walk-forward" in s)
+    assert "19 out-of-sample windows" in wf and "previous 24 months" in wf and "Calmar" in wf
+    assert "<b>out_above</b>: 0.95, 1 or 1.05" in wf and "<b>band</b>: 0.02 or 0.05" in wf
+    assert "confirm_bars" not in wf  # a one-cell grid is not a choice
+    assert "above 1" in e["rules"][0]["html"]  # defaults, since base_params is empty
+    assert any("-21% in 2008, -15% in 2020" in r for r in e["results"])
+    v = e["verdict"]
+    assert v["status"] == "killed"
+    assert "how many settings were tried (0.12 against 0.95 needed)" in v["html"]
+    assert "too few trades to trust the numbers (19 against 100 needed)" in v["html"]
+    assert "overfit" in v["html"] and "could not even be computed" in v["html"]
+
+    p["study"]["verdict"], p["study"]["failed"] = "pass", []
+    assert explain(p)["verdict"]["status"] == "pass"
+
+
+def test_explain_leverage_extended_pair() -> None:
+    from ehf.web.lab.explain import explain
+
+    p = _payload(
+        strategy="lev_swing",
+        params={
+            "asset": "TQQQ.X",
+            "base": "QQQ",
+            "benchmark": "QQQ",
+            "up_pct": 0.15,
+            "down_pct": 0.2,
+            "lookback": 126,
+            "min_dwell": 5,
+        },
+        universe={"symbols": ["QQQ", "TQQQ.X", "^VIX"]},
+        asset="TQQQ.X",
+        benchmark="QQQ",
+    )
+    e = explain(p)
+    assert e["kind"] == "leverage" and e["name"] == "Bull and bear swings"
+    assert "3× cousin TQQQ" in e["what"] and "never from TQQQ's" in e["what"]
+    assert "up 15% or more from its lowest close of the last 126 days" in e["rules"][0]["html"]
+    assert e["rules"][1]["when"] == "Back to QQQ when" and "down 20%" in e["rules"][1]["html"]
+    assert "at least 5 trading days (about a week)" in e["what"]  # min_dwell
+    assert any("extended series" in s and "3× QQQ" in s for s in e["setup"])
+    assert "In the leveraged fund <b>75%</b>" in " ".join(e["results"])
+
+
+def test_explain_portfolio_uses_gross_exposure_and_escapes_symbols() -> None:
+    from ehf.web.lab.explain import explain
+
+    p = _payload(
+        strategy="tsmom",
+        params={"lookback": 60, "vol_window": 20},
+        universe={"symbols": ["AAA", "<b>EVIL</b>", "CCC"]},
+        asset="<b>EVIL</b>",
+        benchmark="SPY",
+        series={"exposure": [0.0, 0.0, 0.0, 0.0], "gross": [0.5, 1.0, 1.0, 0.5]},
+    )
+    e = explain(p)
+    assert e["kind"] == "portfolio" and e["name"] == "Trend following"
+    assert "each of the 3 symbols" in e["what"] and "last 60 trading days" in e["what"]
+    assert "0.10 / σ" not in e["math"] and "0.1 / σ<sub>i,20</sub>" in e["math"]  # defaults fill in
+    assert "In the market <b>75%</b>" in " ".join(e["results"])  # gross, not the first symbol
+    joined = json.dumps(e)
+    assert "<b>EVIL</b>" not in joined and "&lt;b&gt;EVIL&lt;/b&gt;" in joined
+
+
+def test_explain_never_breaks_the_page() -> None:
+    from ehf.web.lab.explain import explain
+
+    e = explain(
+        _payload(strategy="no_such_strategy", params={"k": 1}, metrics={}, series={}, yearly=[])
+    )
+    assert e["name"] == "no such strategy" and "k = 1" in e["what"] and e["results"] == []
+    # a known strategy with a parameter missing falls back to its docstring, not a 500
+    e = explain(_payload(strategy="vix_sized", params={"asset": "SPY", "target_vol": "bad"}))
+    assert e["name"] == "Size by fear" and e["what"]
+
+
+def test_run_payload_carries_the_short_version(client: TestClient, world: dict[str, Any]) -> None:
+    p = client.get(f"/lab/api/run/{world['hash']}").json()
+    e = p["explain"]
+    assert e["name"] == "Trend following" and e["kind"] == "portfolio"
+    assert "last 60 trading days" in e["what"]
+    assert e["verdict"]["status"] == "pass"  # the fixture's study passed
+    wf = next(s for s in e["setup"] if "Walk-forward" in s)
+    assert "2 out-of-sample windows" in wf and "<b>lookback</b>: 40 or 60" in wf
+    assert p["study"]["checks"] == [] and p["study"]["grid"] == {"lookback": [40, 60]}
+    play = client.post(
+        "/lab/api/play",
+        json={
+            "strategy": "tsmom",
+            "params": {},
+            "symbols": ["aaa"],
+            "start": "2019-01-01",
+            "end": "2021-06-30",
+        },
+    ).json()
+    assert play["explain"]["name"] == "Trend following" and play["explain"]["verdict"] is None
+
+
+def test_blurb_is_one_or_two_sentences_with_the_numbers() -> None:
+    from ehf.web.lab.explain import blurb
+
+    b = blurb(
+        "lev_sma",
+        {"asset": "TQQQ.X", "base": "QQQ", "benchmark": "QQQ", "window": 150, "band": 0.03},
+        universe="QQQ,TQQQ.X,CASH,^VIX",
+        asset="TQQQ.X",
+        metrics={"cagr": 0.254, "max_drawdown": -0.755, "sharpe": 0.71},
+        market={"cagr": 0.124, "max_drawdown": -0.536},
+        out_of_sample=True,
+    )
+    assert b["name"] == "Above the average" and b["tag"] == "Leverage rule"
+    assert b["text"].startswith(
+        "Into TQQQ when QQQ closes more than 3% above its 150-day average; "
+        "back to QQQ when QQQ closes more than 3% below its 150-day average. "
+    )
+    assert "Made <b>25.4%</b> a year against 12.4% for the market" in b["text"]
+    assert "worst fall of <b>-76%</b> versus -54%; Sharpe 0.71 out of sample." in b["text"]
+    # no rule boxes: the first sentence of the description; no numbers: no second sentence
+    b = blurb("dial_hold", {"asset": "SPY"}, universe=["SPY", "CASH"])
+    assert b["text"] == "Buy SPY on day one and never sell."
+    # a hostile symbol is escaped
+    b = blurb("dial_sma", {"asset": "<i>x</i>"}, universe=["<i>x</i>"])
+    assert "<i>" not in b["text"] and "&lt;i&gt;x&lt;/i&gt;" in b["text"]
+
+
+def test_rows_carry_blurbs(client: TestClient, world: dict[str, Any]) -> None:
+    s = client.get("/lab/api/studies").json()["studies"][0]
+    assert s["blurb"]["name"] == "Trend following"
+    assert "last 60 trading days is positive" in s["blurb"]["text"]
+    assert "Made <b>4.0%</b> a year" in s["blurb"]["text"] and "out of sample" in s["blurb"]["text"]
+    r = client.get("/lab/api/runs").json()["runs"][0]
+    assert r["blurb"]["name"] == "Trend following" and "Made <b>" in r["blurb"]["text"]
+    page = client.get("/lab").text
+    assert 'data-tip-name="Trend following"' in page and "data-tip=" in page

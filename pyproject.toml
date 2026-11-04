@@ -55,6 +55,7 @@ ignore = ["PD008", "PD010"]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/build_*.py" = ["E501"]  # report builders: long prose strings
+"ehf/web/lab/explain.py" = ["E501"]  # the run explainer: long prose strings
 
 [tool.mypy]
 python_version = "3.11"
