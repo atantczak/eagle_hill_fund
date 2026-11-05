@@ -51,6 +51,18 @@ NAMES: dict[str, str] = {
     "xsmom": "Winners minus losers",
     "bollinger_reversion": "Buy the deep dip",
     "rise_fall": "Buy small dips in an uptrend",
+    "ew_hold": "Equal-weight the basket",
+    "member_ew": "Equal-weight the S&P 500",
+    "pead": "Earnings beat drift",
+    "grades_momo": "Analyst upgrades",
+    "fscore_value": "Cheap and healthy",
+    "shareholder_yield": "Cash back to owners",
+    "insider_cluster": "Insiders buying",
+    "congress_follow": "Follow Congress",
+    "curve_dial": "The yield curve",
+    "claims_dial": "Jobless claims",
+    "cugo_rotation": "Copper versus gold",
+    "dollar_em": "The dollar and overseas stocks",
 }
 RULE_NUMBER: dict[str, int] = {
     "vix_term": 1,
@@ -856,6 +868,182 @@ def _rise_fall(c: Ctx) -> Text:
     )
 
 
+def _stocks_note() -> str:
+    return (
+        " Only stocks in the S&P 500 on that day are eligible, using the index's own history of "
+        "additions and removals, and every chosen stock gets an equal share of the money."
+    )
+
+
+def _ew_hold(c: Ctx) -> Text:
+    return Text(
+        what=(
+            f"The passive benchmark for this basket: put an equal share of the money in "
+            f"{_basket(c)} and leave it there. Anything clever has to beat this."
+        )
+    )
+
+
+def _member_ew(c: Ctx) -> Text:
+    return Text(
+        what=(
+            "The passive benchmark for the stock pickers: an equal share of the money in every "
+            "S&P 500 member of the day. The stock-picking rules have to beat this, not just the market."
+        )
+    )
+
+
+def _pead(c: Ctx) -> Text:
+    q, n = float(c.p["min_surprise"]), int(c.p["hold"])
+    return Text(
+        what=(
+            "Post-earnings drift: when a company beats analysts' profit estimates by a wide margin, "
+            "its stock has tended to keep rising for weeks, not just on the day. Buy on the first "
+            f"day after the report when earnings per share beat the estimate by at least {pct(q, 0)} "
+            f"of the estimate, and hold for {days(n)}." + _stocks_note()
+        ),
+        rules=[
+            ("Buy when", f"reported earnings beat the analyst estimate by {pct(q, 0)} or more."),
+            ("Sell when", f"{days(n)} have passed with no new beat."),
+        ],
+    )
+
+
+def _grades(c: Ctx) -> Text:
+    w, m = int(c.p["window"]), int(c.p["min_net"])
+    return Text(
+        what=(
+            "Analyst upgrades: Wall Street analysts change their ratings in bunches, and stocks that "
+            f"collect upgrades have tended to keep doing well. Count upgrades minus downgrades over "
+            f"the last {days(w)} and hold every stock with a net count of at least {m}."
+            + _stocks_note()
+        ),
+        rules=[("Hold when", f"upgrades minus downgrades over {days(w)} is {m} or more.")],
+    )
+
+
+def _fscore(c: Ctx) -> Text:
+    f, q = int(c.p["min_fscore"]), float(c.p["quantile"])
+    return Text(
+        what=(
+            "Cheap and healthy: the Piotroski F-score is a nine-point checklist from the financial "
+            "statements (profitable, cash coming in, less debt, no new shares, improving margins, and "
+            f"so on). Among stocks scoring at least {f}, buy the cheapest {pct(q, 0)} by earnings "
+            "yield (a year of profits divided by the company's market value). Statements count only "
+            "from the day they were filed." + _stocks_note()
+        ),
+        rules=[
+            ("Hold when", f"F-score is {f}+ and earnings yield is in the top {pct(q, 0)} of those.")
+        ],
+    )
+
+
+def _shy(c: Ctx) -> Text:
+    q, f = float(c.p["quantile"]), int(c.p["min_fscore"])
+    extra = f" and an F-score of at least {f}" if f > 0 else ""
+    return Text(
+        what=(
+            "Cash back to owners: shareholder yield is a year of dividends plus net share buybacks, "
+            "divided by the company's market value. Companies that hand back a lot of cash have "
+            f"tended to be disciplined and cheap. Hold the top {pct(q, 0)} by that yield{extra}."
+            + _stocks_note()
+        ),
+    )
+
+
+def _insider(c: Ctx) -> Text:
+    w, m, n = int(c.p["window"]), int(c.p["min_buyers"]), int(c.p["hold"])
+    return Text(
+        what=(
+            "Insiders buying: executives and directors sell for many reasons but buy with their own "
+            "money for one. When at least "
+            f"{m} open-market purchases by insiders are filed within {days(w)}, buy the stock and "
+            f"hold it for {days(n)}. Purchases count from the day the filing became public."
+            + _stocks_note()
+        ),
+    )
+
+
+def _congress(c: Ctx) -> Text:
+    w, m = int(c.p["window"]), int(c.p["min_net"])
+    return Text(
+        what=(
+            "Follow Congress: members of Congress must disclose their stock trades, usually weeks "
+            f"later. Hold every stock where disclosed purchases minus sales over the last {days(w)} "
+            f"come to at least {m}. Trades count from the disclosure date, not the trade date, so "
+            "this is what an outsider could actually have followed. Data starts in 2015."
+            + _stocks_note()
+        ),
+    )
+
+
+def _curve(c: Ctx) -> Text:
+    t, mode, mem = float(c.p["threshold"]), str(c.p["mode"]), int(c.p["memory"])
+    when = {
+        "inverted": f"while the 10-year Treasury yield sits less than {plain(t)} points above the 3-month yield",
+        "after": f"once the curve climbs back above {plain(t)} after having been below it in the last {days(mem)}, the stretch when recessions have usually begun",
+        "both": f"while the curve is below {plain(t)} or has been within the last {days(mem)}",
+    }.get(mode, mode)
+    conf = (
+        " and only if the price is also under its 200-day average" if c.p.get("sma_confirm") else ""
+    )
+    return Text(
+        what=(
+            f"The yield curve: an inverted curve (short rates above long rates) has come before every US "
+            f"recession since the 1960s. Step out of {c.asset} into Treasury bills {when}{conf}."
+        )
+    )
+
+
+def _claims(c: Ctx) -> Text:
+    lb, t, x = int(c.p["lookback"]), float(c.p["threshold"]), float(c.p["exit_frac"])
+    conf = (
+        ", and only if the price is also under its 200-day average"
+        if c.p.get("sma_confirm")
+        else ""
+    )
+    return Text(
+        what=(
+            "Jobless claims: weekly first-time unemployment claims are one of the fastest reads on the "
+            f"job market. Step out of {c.asset} into Treasury bills when the 4-week average of claims is "
+            f"{pct(t, 0)} above its low of the last {days(lb)}{conf}; step back in once that rise falls "
+            f"back to {pct(t * x, 0)}. Each week's number counts from the Thursday it is published."
+        )
+    )
+
+
+def _cugo(c: Ctx) -> Text:
+    n, mode = int(c.p["lookback"]), str(c.p["mode"])
+    test = (
+        f"has risen over the last {days(n)}" if mode == "mom" else f"is above its {n}-day average"
+    )
+    return Text(
+        what=(
+            "Copper versus gold: copper is an industrial metal that does well when the economy grows; "
+            "gold is what people buy when worried. When the copper-to-gold price ratio "
+            f"{test}, hold the economically sensitive sectors (materials, industrials, energy, "
+            "financials, consumer discretionary, technology). Otherwise hold the defensive ones "
+            "(utilities, consumer staples, health care)."
+        )
+    )
+
+
+def _dollar(c: Ctx) -> Text:
+    w, b, f = int(c.p["window"]), float(c.p["band"]), str(c.p["foreign"])
+    leg = {
+        "EEM": "emerging-market stocks (EEM)",
+        "EFA": "developed overseas stocks (EFA)",
+        "both": "emerging and developed overseas stocks (EEM and EFA)",
+    }.get(f, f)
+    return Text(
+        what=(
+            "The dollar and overseas stocks: a falling dollar makes foreign assets worth more to a US "
+            f"investor and eases borrowing abroad. Hold {leg} while the dollar index is below its "
+            f"{w}-day average (by {pct(b, 0)} to switch), and the S&P 500 (SPY) otherwise."
+        )
+    )
+
+
 WRITERS: dict[str, Callable[[Ctx], Text]] = {
     "dial_hold": _dial_hold,
     "dial_sma": _dial_sma,
@@ -881,6 +1069,18 @@ WRITERS: dict[str, Callable[[Ctx], Text]] = {
     "xsmom": _xsmom,
     "bollinger_reversion": _bollinger,
     "rise_fall": _rise_fall,
+    "ew_hold": _ew_hold,
+    "member_ew": _member_ew,
+    "pead": _pead,
+    "grades_momo": _grades,
+    "fscore_value": _fscore,
+    "shareholder_yield": _shy,
+    "insider_cluster": _insider,
+    "congress_follow": _congress,
+    "curve_dial": _curve,
+    "claims_dial": _claims,
+    "cugo_rotation": _cugo,
+    "dollar_em": _dollar,
 }
 
 
@@ -974,6 +1174,11 @@ def _write(c: Ctx) -> Text:
         text = WRITERS.get(c.key, _generic)(c)
     except Exception:  # a parameter this module did not expect; never break the page
         text = _generic(c)
+    every = c.p.get("rebalance_every")
+    if _fin(every) and int(every) > 1:
+        text.what += f" The positions are only re-checked every {days(int(every))}, not daily, which keeps trading costs down."
+    if c.key == "xsmom" and c.p.get("long_only"):
+        text.what += " This version is long only: it holds the top group and skips the short side."
     dwell = c.p.get("min_dwell")
     if _kind(c.key) in ("dial", "leverage") and _fin(dwell) and int(dwell) > 1:
         text.what += f" Any change of position is held for at least {days(int(dwell))} before the next one is allowed, a brake on whipsaws."

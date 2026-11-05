@@ -75,4 +75,11 @@ class Strategy(ABC):
         """Template method the engine calls: signals -> size -> exits."""
         signals = self.generate_signals(panel)
         weights = self.size_positions(signals, panel)
-        return self.manage_exits(weights, panel)
+        weights = self.manage_exits(weights, panel)
+        every = self.params.get("rebalance_every", 1)
+        band = self.params.get("rebalance_band", 0.0)
+        if (every and every > 1) or (band and band > 0):
+            from ehf.research.overlays.rebalance import throttle
+
+            weights = throttle(weights, every=every, band=band)
+        return weights

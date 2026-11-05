@@ -238,14 +238,28 @@ class LabData:
     scorecard_dir: Path = SCORECARD_DIR
     _bars_cache: dict[tuple[str, str, str], pd.DataFrame] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _cards_cache: tuple[tuple[tuple[str, int], ...], list[Scorecard]] | None = None
 
     # -- scorecards (walk-forward studies) ------------------------------------------
 
     def scorecards(self) -> list[Scorecard]:
-        out: list[Scorecard] = []
+        """Every card, newest first. Parsed once and reused until a card file is
+        added, removed or rewritten (hundreds of cards would otherwise be re-read
+        on every request)."""
         if not self.scorecard_dir.is_dir():
-            return out
-        for p in sorted(self.scorecard_dir.glob("wf_*.json")):
+            return []
+        paths = sorted(self.scorecard_dir.glob("wf_*.json"))
+        sig = tuple((p.name, p.stat().st_mtime_ns) for p in paths)
+        cached = self._cards_cache
+        if cached is not None and cached[0] == sig:
+            return list(cached[1])
+        out = self._read_scorecards(paths)
+        self._cards_cache = (sig, out)
+        return list(out)
+
+    def _read_scorecards(self, paths: list[Path]) -> list[Scorecard]:
+        out: list[Scorecard] = []
+        for p in paths:
             try:
                 payload = json.loads(p.read_text())
             except (OSError, ValueError):
